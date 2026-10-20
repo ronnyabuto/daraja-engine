@@ -251,3 +251,12 @@ acknowledgment. Synchronous C2B validation is default-off and requires operator
 verification of activation, rejection codes and timeout/default-response behavior.
 Held top-ups use the remaining verified allocation under explicit policy. No
 callback allocates a receipt or authorizes settlement; external gates stay disabled.
+
+## Stage 08 checkout boundary
+
+[Durable checkout](inbound-checkout.md) adds the shared response model and
+server-enforced 35-second retry eligibility without changing pinned CDK or provider
+wire contracts. Current STK query/simulation pages exposed no usable terminal
+failure-code contract on review; STK-RESEND remains disabled and its failure-code
+policy defaults empty. Explicit synthetic test policy proves service behavior only.
+Sat remains unsupported until stage 11 supplies FX; no live rates are fabricated.

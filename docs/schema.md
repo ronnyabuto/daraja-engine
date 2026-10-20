@@ -106,3 +106,18 @@ See [SQLite integration tests](../crates/daraja-core/tests/sqlite.rs) for file-b
 receipt, rollback, event replay, reservation, lease fencing and abrupt-process
 recovery checks. Stage 03 adds persistence primitives; it does not implement the
 stage 09/12/13 provider workers, stage 14 liquidity admission or a public daemon API.
+
+## Stage 08 checkout transaction
+
+No migration is needed: the existing quote/reference uniqueness, caller-scoped
+request bindings, attempt correlations/timestamps and durable jobs implement
+checkout preparation. `prepare_checkout` commits all these records together,
+including first-attempt creation; no response or collection I/O precedes commit.
+Resends use the reconciled quote version and the same immutable quote identity.
+Concurrent stale preparations fail; matching request replays return the stored
+quote without dispatching. A collision retry does not leave a request binding or
+partial quote. Poll and retry times both derive from the persisted attempt start.
+Phone/callback secrets are transient dispatch inputs; the request binding stores
+only their behavior-relevant payload hash (the callback URL is configuration, not
+a customer input). Recovery never reconstructs or replays an uncertain STK request.
+See [checkout contracts](inbound-checkout.md) for failure/recovery and capability limits.

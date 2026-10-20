@@ -34,4 +34,5 @@ mpesa_sat = false
 independent_settlement_evidence = false
 status_original_conversation_id = false
 c2b_validation = false
+stk_resend_failure_codes = false
 operator_legal_approval = false

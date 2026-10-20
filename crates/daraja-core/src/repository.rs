@@ -25,6 +25,7 @@ pub enum RepositoryError {
     Encoding,
     Conflict,
     LeaseLost,
+    ReferenceCollision,
 }
 impl std::fmt::Display for RepositoryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -73,9 +74,16 @@ pub struct Repository {
     pool: SqlitePool,
 }
 
+#[derive(Clone)]
 pub enum StkChange {
     Start(StkAttempt),
     Acknowledge {
+        attempt: Id,
+        merchant: Id,
+        checkout: Id,
+    },
+    /// Bind late dispatch metadata without regressing a paid quote or terminal attempt.
+    RecordAcknowledgment {
         attempt: Id,
         merchant: Id,
         checkout: Id,
@@ -255,6 +263,80 @@ impl Repository {
         tx.commit().await?;
         Ok(())
     }
+    /// Atomically binds a checkout request, quote and optional first/resend attempt.
+    pub(crate) async fn prepare_checkout(
+        &self,
+        key: &RequestKey,
+        payload: &RequestPayload,
+        quote: &InboundQuote,
+        attempt: Option<StkAttempt>,
+        version: Option<i64>,
+        now: Timestamp,
+    ) -> Result<(Id, bool)> {
+        if key.operation != payload.operation {
+            return Err(Error::EvidenceMismatch.into());
+        }
+        let mut tx = self.write().await?;
+        if let Some(id) = checkout_binding(&mut tx, key, payload).await? {
+            return Ok((id, false));
+        }
+        let mut q = if let Some(version) = version {
+            let row = sqlx::query("SELECT data,version FROM inbound_quotes WHERE id=?")
+                .bind(quote.id().as_str())
+                .fetch_one(&mut *tx)
+                .await?;
+            if row.try_get::<i64, _>("version")? != version {
+                return Err(RepositoryError::Conflict);
+            }
+            decode::<InboundQuote>(row.try_get("data")?)?
+        } else {
+            let fresh = InboundQuote::new(
+                quote.id().clone(),
+                quote.account_ref().clone(),
+                quote.shortcode().clone(),
+                quote.terms().clone(),
+            )?;
+            if fresh != *quote {
+                return Err(Error::InvalidTransition.into());
+            }
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM inbound_quotes WHERE account_ref=?)",
+            )
+            .bind(quote.account_ref().as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+            if exists {
+                return Err(RepositoryError::ReferenceCollision);
+            }
+            sqlx::query("INSERT INTO inbound_quotes(id,account_ref,state,data) VALUES(?,?,?,?)")
+                .bind(quote.id().as_str())
+                .bind(quote.account_ref().as_str())
+                .bind(state(&quote.state())?)
+                .bind(encode(quote)?)
+                .execute(&mut *tx)
+                .await?;
+            quote.clone()
+        };
+        if let Some(a) = attempt {
+            q.start_stk(a.clone())?;
+            save_quote(&mut tx, &q, version.unwrap_or(0)).await?;
+            persist_attempt(&mut tx, q.id(), &a).await?;
+        }
+        bind_request(&mut tx, key, payload, q.id()).await?;
+        audit(&mut tx, q.id(), "CHECKOUT_PREPARED", now).await?;
+        tx.commit().await?;
+        Ok((q.id().clone(), true))
+    }
+
+    pub(crate) async fn checkout_binding(
+        &self,
+        key: &RequestKey,
+        payload: &RequestPayload,
+    ) -> Result<Option<Id>> {
+        let mut conn = self.pool.acquire().await?;
+        checkout_binding(&mut conn, key, payload).await
+    }
+
     pub async fn quote(&self, id: &Id) -> Result<(InboundQuote, i64)> {
         let row = sqlx::query("SELECT data,version FROM inbound_quotes WHERE id=?")
             .bind(id.as_str())
@@ -328,21 +410,17 @@ impl Repository {
                 merchant,
                 checkout,
             } => q.acknowledge_stk(&attempt, merchant, checkout)?,
+            StkChange::RecordAcknowledgment {
+                attempt,
+                merchant,
+                checkout,
+            } => q.record_stk_ack(&attempt, merchant, checkout)?,
             StkChange::Unknown(a) => q.stk_unknown(&a)?,
             StkChange::Finish { attempt, succeeded } => q.finish_stk(&attempt, succeeded)?,
         }
         save_quote(&mut tx, q, version).await?;
         for a in q.attempts() {
-            sqlx::query("INSERT INTO stk_attempts(id,quote_id,caller_request,merchant_request,checkout_request,next_poll_at,resend_after,data) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET merchant_request=excluded.merchant_request,checkout_request=excluded.checkout_request,data=excluded.data")
-                .bind(a.id().as_str()).bind(id.as_str()).bind(a.caller_request().as_str()).bind(a.merchant_request().map(Id::as_str)).bind(a.checkout_request().map(Id::as_str)).bind(time(a.next_poll_at())?).bind(time(a.resend_after())?).bind(encode(a)?).execute(&mut *tx).await?;
-            enqueue(
-                &mut tx,
-                &format!("stk:{}", a.id().as_str()),
-                "POLL_STK",
-                a.id(),
-                a.next_poll_at(),
-            )
-            .await?;
+            persist_attempt(&mut tx, id, a).await?;
         }
         audit(&mut tx, id, "STK_CHANGED", now).await?;
         tx.commit().await?;
@@ -617,6 +695,35 @@ async fn enqueue(
     sqlx::query("INSERT INTO durable_jobs(id,kind,subject,due_at) VALUES(?,?,?,?) ON CONFLICT(kind,subject) DO NOTHING").bind(id).bind(kind).bind(subject.as_str()).bind(time(due)?).execute(conn).await?;
     Ok(())
 }
+async fn checkout_binding(
+    conn: &mut SqliteConnection,
+    key: &RequestKey,
+    payload: &RequestPayload,
+) -> Result<Option<Id>> {
+    let row = sqlx::query("SELECT payload_hash,operation_id FROM request_bindings WHERE caller=? AND operation=? AND request_key=?")
+        .bind(key.caller.as_str()).bind(key.operation.as_str()).bind(key.key.as_str()).fetch_optional(conn).await?;
+    row.map(|row| {
+        if row.try_get::<Vec<u8>, _>("payload_hash")? != payload.hash().as_bytes() {
+            return Err(Error::IdempotencyConflict.into());
+        }
+        Ok(Id::new(row.try_get::<String, _>("operation_id")?)?)
+    })
+    .transpose()
+}
+
+async fn persist_attempt(conn: &mut SqliteConnection, quote: &Id, a: &StkAttempt) -> Result<()> {
+    sqlx::query("INSERT INTO stk_attempts(id,quote_id,caller_request,merchant_request,checkout_request,next_poll_at,resend_after,data) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET merchant_request=excluded.merchant_request,checkout_request=excluded.checkout_request,data=excluded.data")
+        .bind(a.id().as_str()).bind(quote.as_str()).bind(a.caller_request().as_str()).bind(a.merchant_request().map(Id::as_str)).bind(a.checkout_request().map(Id::as_str)).bind(time(a.next_poll_at())?).bind(time(a.resend_after())?).bind(encode(a)?).execute(&mut *conn).await?;
+    enqueue(
+        conn,
+        &format!("stk:{}", a.id().as_str()),
+        "POLL_STK",
+        a.id(),
+        a.next_poll_at(),
+    )
+    .await
+}
+
 async fn bind_request(
     conn: &mut SqliteConnection,
     key: &RequestKey,

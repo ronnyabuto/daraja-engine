@@ -2,6 +2,7 @@
 
 pub mod amount;
 pub mod auth;
+pub mod checkout;
 pub mod collection;
 pub mod crypto;
 pub mod identity;

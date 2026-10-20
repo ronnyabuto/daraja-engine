@@ -197,6 +197,27 @@ impl InboundQuote {
         if self.state == InboundState::Paid {
             return Err(Error::InvalidTransition);
         }
+        let stored = self
+            .attempts
+            .iter()
+            .find(|a| &a.id == attempt)
+            .ok_or(Error::NotFound)?;
+        if !matches!(
+            stored.state,
+            AttemptState::Dispatching | AttemptState::Unknown | AttemptState::Sent
+        ) {
+            return Err(Error::InvalidTransition);
+        }
+        self.record_stk_ack(attempt, merchant, checkout)
+    }
+
+    /// Provider correlations remain useful when the manual rail settled before the acknowledgment.
+    pub(crate) fn record_stk_ack(
+        &mut self,
+        attempt: &Id,
+        merchant: Id,
+        checkout: Id,
+    ) -> Result<(), Error> {
         if self
             .attempts
             .iter()
@@ -209,12 +230,6 @@ impl InboundQuote {
             .iter_mut()
             .find(|a| &a.id == attempt)
             .ok_or(Error::NotFound)?;
-        if !matches!(
-            stored.state,
-            AttemptState::Dispatching | AttemptState::Unknown | AttemptState::Sent
-        ) {
-            return Err(Error::InvalidTransition);
-        }
         if stored
             .checkout_request
             .as_ref()
@@ -231,7 +246,9 @@ impl InboundQuote {
         }
         stored.merchant_request = Some(merchant);
         stored.checkout_request = Some(checkout);
-        stored.state = AttemptState::Sent;
+        if !matches!(stored.state, AttemptState::Completed | AttemptState::Failed) {
+            stored.state = AttemptState::Sent;
+        }
         if matches!(self.state, InboundState::Issued | InboundState::StkSent) {
             self.state = InboundState::StkSent;
         }

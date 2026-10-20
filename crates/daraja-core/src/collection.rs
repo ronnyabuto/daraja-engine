@@ -138,6 +138,10 @@ impl<T: HttpTransport, C: Clock> CollectionClient<T, C> {
             stk,
         })
     }
+    pub fn shortcode(&self) -> &Id {
+        &self.stk.shortcode
+    }
+
     fn stk_body(&self) -> Value {
         let password = stk_password(self.stk.shortcode.as_str(), &self.stk.passkey, &self.clock);
         json!({"BusinessShortCode":self.stk.shortcode.as_str(), "Password":password.password.expose(), "Timestamp":password.timestamp})

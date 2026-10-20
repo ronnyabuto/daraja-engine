@@ -69,8 +69,9 @@ OS entropy in `TokioQueryRuntime`. Injectable entropy/sleep makes the schedule
 reproducible. Retry indices begin at zero. A zero-retry policy is allowed. Every
 retry builds a fresh timestamp/password. Exhaustion returns the last original
 outcome. Other errors, financial submission, registration and asynchronous status
-requests never use this retry policy. The transport implements no 35/65/110-second
-worker schedule or resend cooldown; those remain stages 08/09.
+requests never use this retry policy. The transport implements no 35/65/110-second worker schedule or resend cooldown.
+The [stage 08 checkout service](inbound-checkout.md) now enforces durable resend
+cooldown and explicit reconciliation; scheduled workers remain stage 09.
 
 ## Asynchronous persistence hooks
 

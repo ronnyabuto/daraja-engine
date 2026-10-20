@@ -183,3 +183,18 @@ Stage 03 must reproduce the invariants on file-backed SQLite with rollback,
 competing writers and reopen/crash tests. Stages 09/13/15 provide trusted evidence
 acquisition and operator resolution; stages 17–19 verify actual CDK behavior.
 Run `cargo test -p daraja-core --test domain --locked` to reproduce the domain checks.
+
+## Stage 08 checkout service
+
+[Durable checkout](inbound-checkout.md) now implements quote creation and explicit
+resends over these transitions. The 35-second timer is only an eligibility check: a
+new prompt also requires prior-attempt reconciliation, an active unexpired quote
+and a successful version-checked preparation commit. Failure query-code mappings
+are disabled by default pending environment-specific operator verification. A
+failed callback alone cannot authorize resend; known correlations are queried
+again. A missing checkout ID after possible dispatch blocks resend. Immediate
+manual fallback has no payer-phone equality requirement. The separate dispatch
+metadata recording path can bind a late acknowledgment after PAID; it preserves
+financial state and terminal attempt results so additional payments can still be
+matched and held as excess. The original public acknowledgment transition still
+rejects PAID.

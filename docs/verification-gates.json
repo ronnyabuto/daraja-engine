@@ -12,6 +12,7 @@
     {"id":"SETTLE", "capability":"independent_settlement_evidence", "enabled":false, "classification":"UNRESOLVED_TRUST"},
     {"id":"STATUS-ID", "capability":"status_original_conversation_id", "enabled":false, "classification":"DOCUMENTED_NOT_LIVE_VERIFIED"},
     {"id":"C2B-VALIDATE", "capability":"c2b_validation", "enabled":false, "classification":"DOCUMENTED_NOT_LIVE_VERIFIED"},
+    {"id":"STK-RESEND", "capability":"stk_resend_failure_codes", "enabled":false, "classification":"UNVERIFIED"},
     {"id":"LEGAL", "capability":"operator_legal_approval", "enabled":false, "classification":"BLOCKED_OPERATOR_COUNSEL"},
     {"id":"WIRE-BUYGOODS", "capability":"b2b_buy_goods", "enabled":false, "classification":"UNVERIFIED"},
     {"id":"WIRE-PAYBILL", "capability":"b2b_pay_bill", "enabled":false, "classification":"UNVERIFIED"},
