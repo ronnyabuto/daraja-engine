@@ -106,6 +106,102 @@ pub struct JobClaim {
 }
 
 impl Repository {
+    pub(crate) async fn callback_quote(
+        &self,
+        binding: &str,
+        stk: bool,
+    ) -> Result<Option<InboundQuote>> {
+        let sql = if stk {
+            "SELECT q.data FROM inbound_quotes q JOIN stk_attempts a ON a.quote_id=q.id WHERE a.checkout_request=?"
+        } else {
+            "SELECT data FROM inbound_quotes WHERE account_ref=?"
+        };
+        let data: Option<String> = sqlx::query_scalar(sql)
+            .bind(binding)
+            .fetch_optional(&self.pool)
+            .await?;
+        data.map(|s| decode(&s)).transpose()
+    }
+
+    /// Local, consistent snapshot only; a validation response never reserves or settles funds.
+    pub(crate) async fn c2b_expected(
+        &self,
+        account: &str,
+        shortcode: &Id,
+        now: Timestamp,
+        topups: bool,
+    ) -> Result<Option<crate::amount::Amount>> {
+        use crate::{
+            amount::{Amount, Unit},
+            inbound::InboundState,
+        };
+        let mut tx = self.pool.begin().await?;
+        let data: Option<String> =
+            sqlx::query_scalar("SELECT data FROM inbound_quotes WHERE account_ref=?")
+                .bind(account)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some(data) = data else { return Ok(None) };
+        let quote: InboundQuote = decode(&data)?;
+        if quote.shortcode() != shortcode
+            || now >= quote.terms().quote_expires_at
+            || quote
+                .terms()
+                .fx
+                .as_ref()
+                .is_some_and(|fx| now >= fx.expires_at)
+        {
+            return Ok(None);
+        }
+        let expected = match quote.state() {
+            InboundState::Issued | InboundState::StkSent => Some(quote.terms().expected),
+            InboundState::UnderpaidHeld if topups => {
+                let rows: Vec<String> =
+                    sqlx::query_scalar("SELECT data FROM mpesa_receipts_ledger WHERE quote_id=?")
+                        .bind(quote.id().as_str())
+                        .fetch_all(&mut *tx)
+                        .await?;
+                let mut total = Amount::new(0, Unit::KesMinor);
+                for row in rows {
+                    let receipt: ConfirmedReceipt = decode(&row)?;
+                    total = total.checked_add(receipt.deposit.evidence().amount)?;
+                }
+                let remaining = quote.terms().expected.checked_sub(total)?;
+                (remaining.value() > 0).then_some(remaining)
+            }
+            _ => None,
+        };
+        tx.commit().await?;
+        Ok(expected)
+    }
+
+    pub(crate) async fn accept_callback(
+        &self,
+        endpoint: &str,
+        quote: Option<&Id>,
+        body: &str,
+        now: Timestamp,
+    ) -> Result<()> {
+        use sha2::{Digest, Sha256};
+        let canonical =
+            crate::transport::strict_json(body).map_err(|_| RepositoryError::Encoding)?;
+        let canonical = encode(&canonical)?;
+        let mut hash = Sha256::new();
+        hash.update(b"daraja.callback.v1\0");
+        hash.update(endpoint.as_bytes());
+        hash.update([0]);
+        hash.update(canonical.as_bytes());
+        let id = format!("{:x}", hash.finalize());
+        let mut tx = self.write().await?;
+        sqlx::query("INSERT INTO callback_inbox(id,endpoint,quote_id,received_at,body) VALUES(?,?,?,?,?) ON CONFLICT(id) DO NOTHING")
+            .bind(&id).bind(endpoint).bind(quote.map(Id::as_str)).bind(time(now)?).bind(canonical)
+            .execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO callback_jobs(observation_id,due_at) VALUES(?,?) ON CONFLICT(observation_id) DO NOTHING")
+            .bind(&id).bind(time(now)?).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         if path.as_ref() == Path::new(":memory:") {
             return Err(RepositoryError::Storage);

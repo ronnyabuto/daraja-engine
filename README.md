@@ -11,8 +11,9 @@ The repository contains one Cargo workspace:
   and a processor library/binary under development.
 - [daraja-daemon](crates/daraja-daemon): planned REST/gRPC sidecar.
 
-**Work in progress.** Stages 00–06 are locally verified. Reconciliation workers,
-callback ingress and runnable services remain unimplemented.
+**Work in progress.** Stages 00–07 are locally verified. Reconciliation workers
+and runnable services remain unimplemented; callback ingress is available as a
+library router.
 Both binaries exit unsuccessfully with an explicit diagnostic. No live provider
 or combined mint integration has been verified; all external capabilities default
 to disabled. See the [roadmap](docs/roadmap.md) for the remaining work.
@@ -24,6 +25,7 @@ to disabled. See the [roadmap](docs/roadmap.md) for the remaining work.
 - [Credential and cryptography contracts](docs/auth-crypto.md)
 - [Collection and query transport](docs/collection-transport.md)
 - [Payout and balance transport](docs/payout-transport.md)
+- [Callback ingress and C2B validation](docs/webhook-ingress.md)
 - [Pinned protocol and provider findings](docs/protocol-contract.md)
 - [Verification gates](docs/verification-gates.md)
 

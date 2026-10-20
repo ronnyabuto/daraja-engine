@@ -1,7 +1,7 @@
-# SQLite repository (stage 03)
+# SQLite repository
 
 Owner: `daraja-core::repository::Repository`; domain rules remain in `inbound`,
-`outbound`, `amount` and `identity`. Two ordered, embedded SQLx migrations live in
+`outbound`, `amount` and `identity`. Three ordered, embedded SQLx migrations live in
 `crates/daraja-core/migrations`. SQLx records/checks their versions and checksums;
 `build.rs` watches the directory. Never edit an applied migration: add a new one.
 Opening a database applies missing migrations and rejects checksum mismatch.
@@ -37,6 +37,8 @@ A timer or lost lease never fails an ambiguous payout or releases its reservatio
 | `receipt_observations` | Delivery identity, claimed receipt, timestamp and exact structured observation. Receipt is indexed **without uniqueness**; several observations may claim it. Same delivery ID/data is idempotent; changed data conflicts without reserving a receipt. |
 | `stk_attempts` | Separate unique attempt/caller/merchant/checkout identities; quote FK; persisted poll/cooldown times and complete attempt snapshot. Global uniqueness also covers attempts on different quotes. |
 | `request_bindings` | Composite caller/operation/key primary key binds canonical SHA-256 payload and original operation. Immutable after insertion. Payout preparation inserts binding atomically with payout/reservation/job; equal retries return original operation, changed payloads conflict. |
+| `callback_inbox` | Stage 07 untrusted canonical callback envelopes, static endpoint, nullable quote hint, received time and domain-separated SHA-256 delivery identity. Contains sensitive provider data; never receipt allocation authority. |
+| `callback_jobs` | One pending work record per inbox observation, due time and eventual completion time. Inserts atomically with inbox acceptance; consumers/leases arrive with later workers. |
 | `durable_jobs` | Unique kind/subject, stable job identity, due time, bounded lease expiry, increasing generation and completion time. Kinds are VERIFY_RECEIPT, POLL_STK and RECONCILE_PAYOUT. |
 | `settlement_events` | Stable increasing sequence for consumer cursors plus unique quote identity, time and credit/receipt payload. Quote mutation, all receipt dispositions, hold resolutions and event insertion commit atomically. Consumer cursors belong to future adapters. |
 | `balance_reservations` | One exact amount-plus-fee reservation per payout. Release requires a domain-validated terminal evidence resolution and shares its transaction. These are durable commitments, not a substitute for stage 14's balance freshness/admission policy. |

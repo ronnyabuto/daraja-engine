@@ -1,6 +1,6 @@
 # Implementation roadmap
 
-Stages 00–06 are implemented and locally verified. This is a development
+Stages 00–07 are implemented and locally verified. This is a development
 workspace, not a runnable payment service or a production-ready mint integration.
 
 | Stages | Scope | State |
@@ -10,7 +10,7 @@ workspace, not a runnable payment service or a production-ready mint integration
 | 04 | Isolated OAuth actors, EAT STK passwords and RSA credentials | Locally verified |
 | 05 | Collection/query transports, explicit C2B registration and asynchronous status hooks/DTOs | Locally verified |
 | 06 | Gated payout/balance transports, immutable preparation and asynchronous correlation hooks | Locally verified |
-| 07 | Secure callback ingress | Planned |
+| 07 | Secure callback ingress, durable inbox/jobs and gated synchronous C2B validation | Locally verified |
 | 08–10 | Durable checkout, independently verified inbound reconciliation and deposit exceptions | Planned |
 | 11–15 | Tariffs/FX, durable payout dispatch/reconciliation, liquidity and operator recovery | Planned |
 | 16 | Optional PostgreSQL parity | Planned |
@@ -18,10 +18,10 @@ workspace, not a runnable payment service or a production-ready mint integration
 | 20–24 | Daemon REST/gRPC, reference clients and consumer examples | Planned |
 | 25–28 | Fault/security closure, packaging, live verification and final requirement audit | Planned |
 
-The current workspace test suite has 80 top-level test entries, including SQLite
+The current workspace test suite has 83 top-level test entries, including SQLite
 child-process helpers. Tests cover domain invariants, file-backed SQLite
 transactions and crash recovery, OAuth coordination, synthetic cryptography,
-collection/query/payout/balance HTTP contracts, deadline phases, throttling and TRACE redaction.
+collection/query/payout/balance HTTP contracts, callback admission/durability/C2B validation, deadline phases, throttling and TRACE redaction.
 See [build and verification commands](../README.md#build-locally) to reproduce them.
 
 Status persistence hooks establish call ordering and failure handling; durable

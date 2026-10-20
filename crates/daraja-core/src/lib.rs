@@ -11,6 +11,7 @@ pub mod payout;
 pub mod repository;
 mod storage;
 pub mod transport;
+pub mod webhook;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {

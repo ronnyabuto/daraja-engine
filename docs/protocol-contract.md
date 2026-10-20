@@ -242,3 +242,12 @@ spellings, gated command/identifier candidates, local input policy and remaining
 current-contract access limits. The current top-up command BusinessPayToBulk is
 not evidence for BusinessTransferFromMMFToUtility. New wire/01/till gates remain
 disabled independently of DUP-B2C, DUP-B2B and SWEEP.
+
+## Stage 07 ingress boundary
+
+[Callback ingress](webhook-ingress.md) implements endpoint-specific admission,
+STK stored-checkout binding, C2B account/shortcode binding and atomic inbox/job
+acknowledgment. Synchronous C2B validation is default-off and requires operator
+verification of activation, rejection codes and timeout/default-response behavior.
+Held top-ups use the remaining verified allocation under explicit policy. No
+callback allocates a receipt or authorizes settlement; external gates stay disabled.
