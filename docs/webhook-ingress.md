@@ -122,3 +122,9 @@ transaction. STK/C2B workers read the durable inbox, while TransactionStatus
 results remain observations correlated to prepared query rows. See
 [inbound reconciliation](inbound-reconcile.md); admission never supplies settlement
 authority.
+
+Stage 10 integrates [persisted exception policy](deposit-exceptions.md): validation
+uses configured KES-only receipt-time grace and the remaining verified top-up
+amount. Refund-reserved quotes reject new top-ups. This is snapshot admission,
+not a funds reservation or independent deposit verification; external validation
+activation remains disabled pending operator evidence.

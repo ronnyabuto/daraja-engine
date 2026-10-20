@@ -56,6 +56,7 @@ fn ledger(quote: InboundQuote) -> Accounting {
 }
 fn deposit(receipt: &str, amount: u64, rail: DepositRail) -> VerifiedDeposit {
     VerifiedDeposit::attest(DepositAttestation {
+        payer: None,
         source: EvidenceSource::ReviewedStatement(id("synthetic-statement")),
         receipt: receipt_id(receipt),
         quote_id: Some(id("quote")),

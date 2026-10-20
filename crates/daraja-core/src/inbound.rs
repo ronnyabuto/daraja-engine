@@ -17,6 +17,7 @@ pub enum InboundState {
     OverpaidHeld,
     SettlementHeld,
     Paid,
+    RefundHeld,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -157,6 +158,22 @@ impl InboundQuote {
     pub fn terms(&self) -> &QuoteTerms {
         &self.terms
     }
+    pub(crate) fn accepts_receipt_time(
+        &self,
+        at: Timestamp,
+        kes_grace: u64,
+    ) -> Result<bool, Error> {
+        Ok(at < self.terms.quote_expires_at
+            || (self.terms.credit.unit() == Unit::KesMinor
+                && at.0
+                    < self
+                        .terms
+                        .quote_expires_at
+                        .0
+                        .checked_add(kes_grace)
+                        .ok_or(Error::Overflow)?))
+    }
+
     pub fn attempts(&self) -> &[StkAttempt] {
         &self.attempts
     }
@@ -325,8 +342,18 @@ pub enum EvidenceSource {
     ReviewedStatement(Id),
 }
 
+/// A stable pseudonymous identity from the trusted verifier, not a raw MSISDN.
+#[derive(Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedPayer {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    pub subject: Id,
+    pub identity_verified: bool,
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct DepositAttestation {
+    /// Independently established payer identity; never copied from callback MSISDN.
+    pub payer: Option<VerifiedPayer>,
     pub source: EvidenceSource,
     pub receipt: ReceiptId,
     pub quote_id: Option<Id>,
@@ -394,6 +421,7 @@ pub struct SettlementEvent {
 /// receipt allocations, quote mutation and this outbox in one transaction/CAS.
 #[derive(Default)]
 pub struct Accounting {
+    pub(crate) blocked: bool,
     pub(crate) quotes: BTreeMap<Id, InboundQuote>,
     observations: Vec<ReceiptObservation>,
     pub(crate) receipts: BTreeMap<ReceiptId, ConfirmedReceipt>,
@@ -461,6 +489,32 @@ impl Accounting {
     }
 
     pub fn confirm(&mut self, deposit: VerifiedDeposit) -> Result<DepositState, Error> {
+        self.confirm_with_grace(deposit, 0)
+    }
+
+    pub(crate) fn hold_until(&mut self, id: &Id, until: Timestamp) -> Result<(), Error> {
+        let quote = self.quotes.get_mut(id).ok_or(Error::NotFound)?;
+        quote.terms.hold_until = quote.terms.hold_until.max(until);
+        Ok(())
+    }
+
+    pub(crate) fn reserve_refund(&mut self, id: &Id) -> Result<(), Error> {
+        let quote = self.quotes.get_mut(id).ok_or(Error::NotFound)?;
+        if !matches!(
+            quote.state,
+            InboundState::UnderpaidHeld | InboundState::OverpaidHeld
+        ) {
+            return Err(Error::InvalidTransition);
+        }
+        quote.state = InboundState::RefundHeld;
+        Ok(())
+    }
+
+    pub(crate) fn confirm_with_grace(
+        &mut self,
+        deposit: VerifiedDeposit,
+        grace: u64,
+    ) -> Result<DepositState, Error> {
         let evidence = &deposit.0;
         if self.receipts.contains_key(&evidence.receipt) {
             return Err(Error::DuplicateReceipt);
@@ -480,9 +534,9 @@ impl Accounting {
             if evidence.shortcode != quote.shortcode || !rail_matches {
                 return Err(Error::EvidenceMismatch);
             }
-            if quote.state == InboundState::Paid {
+            if matches!(quote.state, InboundState::Paid | InboundState::RefundHeld) {
                 state = DepositState::OverpaidHeld;
-            } else if evidence.received_at >= quote.terms.quote_expires_at {
+            } else if !quote.accepts_receipt_time(evidence.received_at, grace)? {
                 state = DepositState::LateHeld;
             } else if quote
                 .terms
@@ -504,7 +558,9 @@ impl Accounting {
                     std::cmp::Ordering::Greater => {
                         (DepositState::OverpaidHeld, InboundState::OverpaidHeld)
                     }
-                    std::cmp::Ordering::Equal if evidence.verified_at < quote.terms.hold_until => {
+                    std::cmp::Ordering::Equal
+                        if self.blocked || evidence.verified_at < quote.terms.hold_until =>
+                    {
                         (DepositState::SettlementHeld, InboundState::SettlementHeld)
                     }
                     std::cmp::Ordering::Equal => (DepositState::Verified, InboundState::Verifying),
@@ -530,7 +586,9 @@ impl Accounting {
 
     pub fn settle(&mut self, id: &Id, now: Timestamp) -> Result<SettlementEvent, Error> {
         let quote = self.quotes.get(id).ok_or(Error::NotFound)?;
-        if quote.state == InboundState::Paid || self.events.contains_key(id) {
+        if matches!(quote.state, InboundState::Paid | InboundState::RefundHeld)
+            || self.events.contains_key(id)
+        {
             return Err(Error::InvalidTransition);
         }
         if self.allocated(id)? != quote.terms.expected {
@@ -544,7 +602,7 @@ impl Accounting {
         {
             return Err(Error::FxExpired);
         }
-        if now < quote.terms.hold_until {
+        if self.blocked || now < quote.terms.hold_until {
             return Err(Error::SettlementHeld);
         }
         let mut receipt_ids = vec![];
@@ -583,6 +641,7 @@ enum StoredInboundState {
     OverpaidHeld,
     SettlementHeld,
     Paid,
+    RefundHeld,
 }
 impl crate::storage::Stored for InboundState {
     fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -730,6 +789,8 @@ impl crate::storage::Stored for EvidenceSource {
 #[derive(serde::Deserialize)]
 #[serde(remote = "DepositAttestation")]
 struct StoredDepositAttestation {
+    #[serde(default)]
+    payer: Option<VerifiedPayer>,
     #[serde(deserialize_with = "crate::storage::deserialize")]
     source: EvidenceSource,
     #[serde(deserialize_with = "crate::storage::deserialize")]

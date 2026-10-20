@@ -208,3 +208,16 @@ default `UnavailableVerifier` leaves it unresolved. Success codes alone never
 construct trusted value. Already verified settlement holds can release from
 durable evidence, while rechecking FX, amount and time. Quote settlement, event
 insertion and worker completion commit together; consumption replays by sequence.
+
+## Stage 10 exception policy
+
+[Deposit exceptions](deposit-exceptions.md) now implement the previously deferred
+local exception/refund boundary. `UNDERPAID_HELD` / `OVERPAID_HELD` can transition
+to `REFUND_HELD` only with an atomic full-balance refund reservation; this state
+cannot mint, accept further quote allocations or admit validation top-ups.
+Additional verified receipts remain separate exceptions. KES receipt-time grace
+is explicitly configured and defaults to zero; sat/FX expiry remains strict.
+Persisted timed risk holds and manual velocity/reversal blocks apply through all
+repository settlement paths. Operator block release does not bypass amount, FX,
+verification or timed hold checks. Refund requests remain `EXECUTION_GATED`;
+operator authentication/workflows and outbound execution remain later stages.

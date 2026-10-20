@@ -409,6 +409,7 @@ async fn immediate_fallback_survives_hanging_dispatch_and_secondary_payer_has_no
     task.abort();
     // Independently reviewed synthetic evidence, separate from that untrusted callback.
     let verified = VerifiedDeposit::attest(DepositAttestation {
+        payer: None,
         source: EvidenceSource::ReviewedStatement(id("synthetic-secondary-payer-statement")),
         receipt: ReceiptId::new("SECONDARY1").unwrap(),
         quote_id: Some(c.quote_id.clone()),
@@ -611,6 +612,7 @@ async fn older_attempt_receipts_cannot_create_second_settlement_after_resend() {
     f.wait(&c.quote_id, AttemptState::Sent).await;
     for (index, checkout) in ["checkout-2", "checkout-1"].iter().enumerate() {
         let verified = VerifiedDeposit::attest(DepositAttestation {
+            payer: None,
             source: EvidenceSource::ReviewedStatement(id("synthetic-statement")),
             receipt: ReceiptId::new(&format!("RECEIPT{index}")).unwrap(),
             quote_id: Some(c.quote_id.clone()),
@@ -830,6 +832,7 @@ async fn acknowledgment_after_manual_settlement_retains_ids_and_holds_late_stk_p
     .unwrap();
     let deposit = |receipt: &str, rail: DepositRail| {
         VerifiedDeposit::attest(DepositAttestation {
+            payer: None,
             source: EvidenceSource::ReviewedStatement(id("synthetic-statement")),
             receipt: ReceiptId::new(receipt).unwrap(),
             quote_id: Some(c.quote_id.clone()),

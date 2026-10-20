@@ -194,6 +194,7 @@ impl Fixture {
     }
     fn evidence(&self, stk: bool) -> DepositAttestation {
         DepositAttestation {
+            payer: None,
             source: EvidenceSource::AuthenticatedProviderRecord(id("synthetic-independent-record")),
             receipt: ReceiptId::new("REAL123").unwrap(),
             quote_id: Some(id("q")),
@@ -867,6 +868,7 @@ async fn settlement_commit_child() {
         .unwrap();
     let repository = Repository::open(path).await.unwrap();
     let evidence = DepositAttestation {
+        payer: None,
         source: EvidenceSource::AuthenticatedProviderRecord(id("synthetic-independent-record")),
         receipt: ReceiptId::new("REAL123").unwrap(),
         quote_id: Some(id("q")),
@@ -992,4 +994,43 @@ async fn simultaneous_callback_and_poll_workers_commit_one_settlement() {
             .await
             .unwrap();
     assert_eq!(completed, 2);
+}
+
+#[tokio::test]
+async fn configured_risk_hold_applies_to_worker_and_releases_from_persisted_evidence() {
+    use daraja_core::repository::DepositPolicy;
+    let f = Fixture::new(true, 0).await;
+    f.repo
+        .set_deposit_policy(
+            &DepositPolicy {
+                high_value_minor: 10000,
+                hold_seconds: 90,
+                velocity_window_seconds: 300,
+                velocity_limit: 1,
+                ..Default::default()
+            },
+            &id("operator"),
+            Timestamp(f.base),
+        )
+        .await
+        .unwrap();
+    let mut w = f.worker(
+        Queries::new(QueryState::Success),
+        Records::new(Some(f.evidence(true))),
+    );
+    f.clock.set(f.base + 35);
+    w.run_once().await.unwrap();
+    assert_eq!(f.financial_counts().await, (1, 0));
+    assert_eq!(
+        f.repo.quote(&id("q")).await.unwrap().0.state(),
+        InboundState::SettlementHeld
+    );
+    w.repository = Repository::open(&f.path).await.unwrap();
+    *w.verifier.record.lock().unwrap() = None;
+    *w.queries.result.lock().unwrap() = QueryState::Unresolved;
+    f.clock.set(f.base + 95);
+    assert!(!w.run_once().await.unwrap());
+    f.clock.set(f.base + 96);
+    w.run_once().await.unwrap();
+    assert_eq!(f.financial_counts().await, (1, 1));
 }

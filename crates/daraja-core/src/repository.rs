@@ -48,6 +48,9 @@ impl From<serde_json::Error> for RepositoryError {
         Self::Encoding
     }
 }
+mod exceptions;
+pub use exceptions::{DepositPolicy, RefundAuthorization, RefundRequest};
+
 type Result<T> = std::result::Result<T, RepositoryError>;
 fn encode(value: &impl Serialize) -> Result<String> {
     Ok(serde_json::to_string(value)?)
@@ -154,7 +157,8 @@ impl Repository {
         let Some(data) = data else { return Ok(None) };
         let quote: InboundQuote = decode(&data)?;
         if quote.shortcode() != shortcode
-            || now >= quote.terms().quote_expires_at
+            || !quote
+                .accepts_receipt_time(now, exceptions::policy(&mut tx).await?.kes_grace_seconds)?
             || quote
                 .terms()
                 .fx
@@ -542,7 +546,9 @@ impl Repository {
             }
             return Err(Error::DuplicateReceipt.into());
         }
-        a.confirm(deposit)?;
+        let policy = exceptions::policy(&mut tx).await?;
+        exceptions::apply_risk(&mut tx, &mut a, &deposit, &policy).await?;
+        a.confirm_with_grace(deposit, policy.kes_grace_seconds)?;
         let r = a.receipt(&receipt).ok_or(Error::NotFound)?;
         let allocation = match &r.allocation {
             Allocation::Quote(q) => Some(q.as_str()),
@@ -576,7 +582,8 @@ impl Repository {
                         q.state(),
                         crate::inbound::InboundState::Verifying
                             | crate::inbound::InboundState::SettlementHeld
-                    ) && settle_at >= q.terms().hold_until
+                    ) && !a.blocked
+                        && settle_at >= q.terms().hold_until
                         && q.terms()
                             .fx
                             .as_ref()
@@ -785,10 +792,13 @@ impl Repository {
         check_lease(&mut tx, claim, now).await?;
         let mut a = load_accounting(&mut tx, Some(id)).await?;
         let q = a.quote(id).ok_or(Error::NotFound)?;
-        if !matches!(
-            q.state(),
-            crate::inbound::InboundState::SettlementHeld | crate::inbound::InboundState::Verifying
-        ) || now < q.terms().hold_until
+        if a.blocked
+            || !matches!(
+                q.state(),
+                crate::inbound::InboundState::SettlementHeld
+                    | crate::inbound::InboundState::Verifying
+            )
+            || now < q.terms().hold_until
             || q.terms().fx.as_ref().is_some_and(|fx| now >= fx.expires_at)
         {
             return Ok(false);
@@ -974,6 +984,12 @@ async fn load_accounting(conn: &mut SqliteConnection, id: Option<&Id>) -> Result
             .ok_or(Error::NotFound)?;
         let quote: InboundQuote = decode(&data)?;
         a.quotes.insert(id.clone(), quote);
+        a.blocked =
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM deposit_blocks WHERE quote_id=?")
+                .bind(id.as_str())
+                .fetch_one(&mut *conn)
+                .await?
+                != 0;
         let rows = sqlx::query("SELECT receipt,data FROM mpesa_receipts_ledger WHERE quote_id=?")
             .bind(id.as_str())
             .fetch_all(&mut *conn)

@@ -124,3 +124,18 @@ Phone/callback secrets are transient dispatch inputs; the request binding stores
 only their behavior-relevant payload hash (the callback URL is configuration, not
 a customer input). Recovery never reconstructs or replays an uncertain STK request.
 See [checkout contracts](inbound-checkout.md) for failure/recovery and capability limits.
+
+## Stage 10 exception reservations
+
+Migration `0005_deposit_exceptions.sql` adds persisted `deposit_policy`,
+receipt-keyed `deposit_risk` and velocity indexing, `deposit_blocks`, idempotent
+`deposit_alerts`, immutable gated `refund_requests` and uniquely receipt-keyed
+`refund_reservations`. Risk inserts are deferred-FK checked at commit so receipt,
+risk, quote, event and worker writes remain one transaction. All refund financial
+mutations use the same immediate write transaction as confirmation/settlement.
+`REFUND_HELD` closes the quote to further allocations and settlement without
+changing immutable receipt allocation or provenance. Refund snapshots retain
+reviewed ownership/destination evidence and frozen gross/fee/net values.
+[Deposit exception contracts](deposit-exceptions.md) define grace, risk identity,
+operator trust boundaries and the execution gate. Existing snapshots without a
+payer remain readable with `payer: None`; no earlier migration is rewritten.

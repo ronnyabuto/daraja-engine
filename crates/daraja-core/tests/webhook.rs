@@ -346,6 +346,7 @@ async fn real_routes_enforce_admission_durability_validation_and_redaction() {
     // A forged same-receipt observation cannot consume the verified allocation slot.
     repo.confirm(
         VerifiedDeposit::attest(DepositAttestation {
+            payer: None,
             source: EvidenceSource::ReviewedStatement(id("synthetic-independent-evidence")),
             receipt: ReceiptId::new("SYNTH123").unwrap(),
             quote_id: Some(id("quote")),
@@ -504,6 +505,7 @@ async fn validation_rejects_expired_terms_and_nonactive_quotes() {
     }
     repo.confirm(
         VerifiedDeposit::attest(DepositAttestation {
+            payer: None,
             source: EvidenceSource::ReviewedStatement(id("synthetic-only")),
             receipt: ReceiptId::new("FULLVALUE").unwrap(),
             quote_id: Some(id("VERIFIED")),
@@ -595,4 +597,101 @@ fn configuration_requires_distinct_full_length_hex_secrets_and_bounded_limits() 
             .with_limits(1024, Duration::from_secs(3))
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn validation_uses_kes_grace_and_stops_topups_after_refund_reservation() {
+    use daraja_core::repository::{DepositPolicy, RefundAuthorization};
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::open(dir.path().join("grace.sqlite"))
+        .await
+        .unwrap();
+    let now = Timestamp(chrono::Utc::now().timestamp() as u64);
+    repo.set_deposit_policy(
+        &DepositPolicy {
+            kes_grace_seconds: 600,
+            ..Default::default()
+        },
+        &id("operator"),
+        now,
+    )
+    .await
+    .unwrap();
+    repo.insert_quote(
+        &InboundQuote::new(
+            id("q"),
+            id("GRACE001"),
+            id("12345"),
+            QuoteTerms {
+                expected: kes(10000),
+                credit: kes(9900),
+                quote_expires_at: Timestamp(now.0 - 10),
+                fx: None,
+                tariff: TariffSnapshot {
+                    version: id("v1"),
+                    fee: kes(100),
+                },
+                hold_until: Timestamp(0),
+            },
+        )
+        .unwrap(),
+        now,
+    )
+    .await
+    .unwrap();
+    let (address, server) = serve(repo.clone(), policy(true, true)).await;
+    let validation = Endpoint::C2bValidation;
+    assert_eq!(
+        send(address, validation, c2b("GRACE001", "100")).await.1["ResultCode"],
+        "0"
+    );
+    repo.confirm(
+        VerifiedDeposit::attest(DepositAttestation {
+            payer: None,
+            source: EvidenceSource::ReviewedStatement(id("synthetic-statement")),
+            receipt: ReceiptId::new("GRACEPART").unwrap(),
+            quote_id: Some(id("q")),
+            amount: kes(4000),
+            shortcode: id("12345"),
+            rail: DepositRail::C2b {
+                account_ref: id("GRACE001"),
+            },
+            received_at: now,
+            verified_at: now,
+        })
+        .unwrap(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        send(address, validation, c2b("GRACE001", "60")).await.1["ResultCode"],
+        "0"
+    );
+    assert_eq!(
+        send(address, validation, c2b("GRACE001", "100")).await.1["ResultCode"],
+        "C2B00013"
+    );
+    repo.request_refund(
+        &id("refund"),
+        RefundAuthorization {
+            operator: id("operator"),
+            owner: id("reviewed-owner"),
+            evidence: id("reviewed-destination"),
+            destination: id("reviewed-payer-destination"),
+            receipts: vec![ReceiptId::new("GRACEPART").unwrap()],
+        },
+        TariffSnapshot {
+            version: id("synthetic-b2c"),
+            fee: kes(100),
+        },
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        send(address, validation, c2b("GRACE001", "60")).await.1["ResultCode"],
+        "C2B00012"
+    );
+    server.abort();
 }
