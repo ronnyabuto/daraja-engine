@@ -8,7 +8,7 @@ The three project folders follow the specification's single Cargo workspace:
 - [cdk-daraja-processor](crates/cdk-daraja-processor): CDK gRPC payment processor.
 - [daraja-daemon](crates/daraja-daemon): language-agnostic REST/gRPC sidecar.
 
-**Status: stage 00 build foundation; no payment engine or service is implemented yet.** One Cargo workspace keeps the core, processor and daemon on the same state/protocol contracts. Both binaries exit unsuccessfully with an explicit diagnostic until their service stages are implemented.
+**Status: stages 00–01 build foundation and local protocol verification; no payment engine or service is implemented yet.** One Cargo workspace keeps the core, processor and daemon on the same state/protocol contracts. Both binaries exit unsuccessfully with an explicit diagnostic until their service stages are implemented.
 
 Start with [the sequential implementation guide](docs/implementation/README.md). The original [PDF](docs/spec/prd-v1.0.pdf) and [extracted text](docs/spec/prd-v1.0.txt) are retained locally.
 
@@ -36,12 +36,15 @@ cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 scripts/check-foundation.py
+python3 scripts/test-protocol-gates.py
 ```
 
 Cargo.lock is committed for this application workspace. Keep `--locked` in CI.
 For a fresh-output build, use `CARGO_TARGET_DIR=/tmp/daraja-clean-build cargo
 build --workspace --locked` on one line. See [the protocol contract](docs/protocol-contract.md)
 for exact versions, schema provenance and the `WaitPaymentEvent` PRD mismatch.
+[Verification gates](docs/verification-gates.md) documents the opt-in sandbox
+probe, pinned upstream CDK test runner and disabled external capabilities.
 
 `config.example.toml` contains placeholders only and is not parsed yet. Operators
 will own and supply their credentials locally in later stages; populated

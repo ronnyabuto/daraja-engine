@@ -1,6 +1,6 @@
 # PRD requirement traceability
 
-Planning baseline extracted from docs/spec/prd-v1.0.pdf. Stage 01 must check this decomposition for omissions; add rows rather than silently dropping source requirements. Stage 28 audits every row against the source.
+Planning baseline extracted from docs/spec/prd-v1.0.pdf. Stage 01 checked the relevant PRD sections against these rows; no scope was dropped; add rows rather than silently dropping source requirements. Stage 28 audits every row against the source.
 
 All statuses start NOT_STARTED. Statuses: NOT_STARTED, IN_PROGRESS, DONE (implemented with local evidence), BLOCKED, UNSUPPORTED. Local DONE does not imply live verification. External gate evidence is tracked separately in docs/verification-gates.md once created.
 
@@ -8,11 +8,11 @@ All statuses start NOT_STARTED. Statuses: NOT_STARTED, IN_PROGRESS, DONE (implem
 |---|---|---|---|---|---|
 | R01 | 1, 5.1 | Single Rust 2024 workspace; core library, processor library/binary, sidecar binary | 00 | DONE | Root Cargo.toml; crates/{daraja-core,cdk-daraja-processor,daraja-daemon}/Cargo.toml and src; evidence/00-workspace.md: workspace build, fmt, tests, clippy |
 | R02 | 1, 2.1 | Dual MIT/Apache-2.0 licensing and self-hosted credential ownership | 00,26 | IN_PROGRESS | Stage 00: LICENSE-MIT, LICENSE-APACHE; config.example.toml; .gitignore; scripts/check-foundation.py; evidence/00-workspace.md. Operator packaging remains stage 26. |
-| R03 | 4, 5.1, 7 Phase 0 | Exact pinned CDK service/protobuf and all seven methods | 00,01,17,18 | IN_PROGRESS | Stage 00: docs/protocol-contract.md; vendored proto and upstream licenses; processor build.rs and tests/wire_contract.rs; evidence/00-workspace.md. Exact upstream WaitPaymentEvent differs from PRD; stage 01 decision and stages 17/18 implementation remain. |
-| R04 | 4, 7 Phase 0 | NUT-04/NUT-05 custom mpesa and KES/sat compatibility evidence | 01,19 | NOT_STARTED | — |
-| R05 | 1, 5.3 | Real CDK proof lock semantics across Pending, errors and recovery | 01,18,19 | NOT_STARTED | — |
-| R06 | 5.3, 7 Phase 0 | Independent B2C/B2B idempotency guarantees and gated probing | 01,13,27 | NOT_STARTED | — |
-| R07 | 2, 7 Phase 0 | Provider prerequisites and legal claims verified as deployment gates | 01,27 | NOT_STARTED | — |
+| R03 | 4, 5.1, 7 Phase 0 | Exact pinned CDK service/protobuf and all seven methods | 00,01,17,18 | IN_PROGRESS | Stage 00: docs/protocol-contract.md; vendored proto and upstream licenses; processor build.rs and tests/wire_contract.rs; evidence/00-workspace.md. Stage 01 accepts exact WaitPaymentEvent and records protocol version/header, source traces and loopback gRPC tests (tests/grpc_contract.rs); evidence/01-protocol-gates.md. Stages 17/18 service implementation remains. |
+| R04 | 4, 7 Phase 0 | NUT-04/NUT-05 custom mpesa and KES/sat compatibility evidence | 01,19 | IN_PROGRESS | Stage 01: docs/protocol-contract.md pinned NUT/CDK types; scripts/check-cdk-upstream.py; wire_contract.rs and grpc_contract.rs; evidence/01-protocol-gates.md. Actual custom mint routes/keysets/FX remain gated through stage 19. |
+| R05 | 1, 5.3 | Real CDK proof lock semantics across Pending, errors and recovery | 01,18,19 | IN_PROGRESS | Stage 01: scripts/check-cdk-upstream.py executes real mint regression tests; grpc_contract.rs verifies transport; protocol-contract.md traces error/recovery source. Combined processor/mint gRPC faults and durable process restart remain gated for stages 18/19; evidence/01-protocol-gates.md. |
+| R06 | 5.3, 7 Phase 0 | Independent B2C/B2B idempotency guarantees and gated probing | 01,13,27 | IN_PROGRESS | Stage 01: scripts/sandbox-probe.py; test-protocol-gates.py tests ID and entire body equality, authorization, redaction and no retry; docs/verification-gates.{md,json}; config defaults false. BLOCKED external evidence separately for B2C v3/B2B v1; evidence/01-protocol-gates.md. |
+| R07 | 2, 7 Phase 0 | Provider prerequisites and legal claims verified as deployment gates | 01,27 | IN_PROGRESS | Stage 01: docs/verification-gates.md official legal sources, final LN 134 Fifth Schedule correction, operator/counsel tasks and provider onboarding gates. Deployment clearance BLOCKED pending operator/counsel evidence; evidence/01-protocol-gates.md. |
 | R08 | 4, 5 | Explicit state machines and exact amounts/units | 02 | NOT_STARTED | — |
 | R09 | 4, 5.2, 5.3 | ACID schema, unique identities and safe state transitions | 02,03 | NOT_STARTED | — |
 | R10 | 5.2, 5.3 | Receipt deduplication/allocation, request idempotency and payload identity | 02,03 | NOT_STARTED | — |

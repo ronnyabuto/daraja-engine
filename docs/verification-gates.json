@@ -1,0 +1,17 @@
+{
+  "reviewed": "2026-10-20",
+  "cdk_revision": "9f6d3a3734d7223d10b5553e3591d3f9d5c6c904",
+  "gates": [
+    {"id":"LIVE", "capability":"live_payments", "enabled":false, "classification":"BLOCKED_ACCESS"},
+    {"id":"DUP-B2C", "capability":"b2c_duplicate_probe", "enabled":false, "classification":"DOCUMENTED_NOT_LIVE_VERIFIED"},
+    {"id":"DUP-B2B", "capability":"b2b_duplicate_probe", "enabled":false, "classification":"UNVERIFIED"},
+    {"id":"SWEEP", "capability":"linked_account_sweep", "enabled":false, "classification":"UNVERIFIED"},
+    {"id":"CDK-LOCK", "capability":"cdk_proof_safety", "enabled":false, "classification":"UPSTREAM_LOCAL_INTEGRATION_PENDING"},
+    {"id":"CDK-KES", "capability":"mpesa_kes", "enabled":false, "classification":"SOURCE_TRACED_INTEGRATION_PENDING"},
+    {"id":"CDK-SAT", "capability":"mpesa_sat", "enabled":false, "classification":"SOURCE_TRACED_INTEGRATION_PENDING"},
+    {"id":"SETTLE", "capability":"independent_settlement_evidence", "enabled":false, "classification":"UNRESOLVED_TRUST"},
+    {"id":"STATUS-ID", "capability":"status_original_conversation_id", "enabled":false, "classification":"DOCUMENTED_NOT_LIVE_VERIFIED"},
+    {"id":"C2B-VALIDATE", "capability":"c2b_validation", "enabled":false, "classification":"DOCUMENTED_NOT_LIVE_VERIFIED"},
+    {"id":"LEGAL", "capability":"operator_legal_approval", "enabled":false, "classification":"BLOCKED_OPERATOR_COUNSEL"}
+  ]
+}

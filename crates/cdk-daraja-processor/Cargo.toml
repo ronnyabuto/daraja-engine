@@ -20,6 +20,8 @@ tonic-prost-build.workspace = true
 
 [dev-dependencies]
 prost-types.workspace = true
+tokio = { workspace = true, features = ["net", "sync", "time"] }
+tokio-stream = { version = "=0.1.19", features = ["net"] }
 
 [lints]
 workspace = true

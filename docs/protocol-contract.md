@@ -1,4 +1,4 @@
-# Pinned foundation contract
+# Protocol contract
 
 Recorded 2026-10-20 for stage 00. This document pins build and wire inputs;
 it does not establish provider behavior or CDK financial compatibility.
@@ -81,12 +81,12 @@ There is **no WaitIncomingPayment RPC** in this pin. The similarly named
 Custom options include mint-generated `quote_id` correlation, amount and
 `extra_json`; these must not be replaced with invented PRD DTOs.
 
-Proposed decision for stage 01: target the exact v0.18.2 service and route
+Accepted decision in stage 01: target the exact v0.18.2 service and route
 incoming notifications through `WaitPaymentEvent.payment_received`; retain outgoing
 event semantics for explicit review. Do not rename the RPC or fabricate a legacy
 compatibility service. Only type generation is accepted here; event mapping,
 proof locks, custom `mpesa`/KES/sat handling and all adapter behavior remain gated
-on stage 01 evidence and stages 17–19 implementation.
+on the evidence below and stages 17–19 implementation.
 
 ## Capability boundary
 
@@ -95,3 +95,142 @@ money or settles a quote. Configuration is a documentation template only and all
 listed unverified capabilities are false. Stage 01 creates the detailed live gate
 register; no duplicate-rejection, regulatory, receipt verification or proof-lock
 guarantee has been established by this build.
+
+## Stage 01 research (2026-10-20)
+
+The PDF sections 2, 4, 5.2, 5.3 and Phase 0 were compared with the text using
+`pdftotext -layout`. The following decisions override unsupported assertions in
+the PRD, while preserving its financial invariants. Documentation evidence,
+executed local evidence and external verification are distinct. Portal URLs are
+mutable; observations are dated, not represented as immutable provider releases.
+Historical primary SDK pins: Java `0a3667515b2d8b4abff7a454e8d2934cdb3c1d18`,
+PHP `5effb808e79ba6b3d8631ef83c2b9b31fa450152` (resolved with `git ls-remote`).
+Direct portal fetches often returned a documentation shell; indexed primary-page
+text supplied the observations cited below. No authenticated portal access occurred.
+
+### Provider request contracts
+
+Only `https://sandbox.safaricom.co.ke` is used by the experimental harness.
+Production endpoints are outside this stage's authorization. Requests use OAuth
+Bearer credentials; this authenticates requests to the provider, not callbacks.
+
+| Operation | Path and relevant fields | Evidence / limitation |
+|---|---|---|
+| STK creation | `/mpesa/stkpush/v1/processrequest`; `BusinessShortCode`, `Password`, `Timestamp`, `TransactionType`, `Amount`, `PartyA`, `PartyB`, `PhoneNumber`, `CallBackURL`, `AccountReference`, `TransactionDesc` | [Current STK primary page](https://developer.safaricom.co.ke/apis/MpesaExpressSimulate); [Safaricom Java SDK](https://github.com/safaricom/mpesa-java-sdk/blob/0a3667515b2d8b4abff7a454e8d2934cdb3c1d18/src/main/java/Mpesa.java). SDK is historical, not a current v3 payout reference. |
+| STK query | `/mpesa/stkpushquery/v1/query`; `BusinessShortCode`, `Password`, `Timestamp`, `CheckoutRequestID` | Same [primary SDK](https://github.com/safaricom/mpesa-java-sdk/blob/0a3667515b2d8b4abff7a454e8d2934cdb3c1d18/src/main/java/Mpesa.java), method `STKPushTransactionStatus`; query is checkout-specific, not manual C2B lookup. |
+| C2B registration | `/mpesa/c2b/v1/registerurl`; `ShortCode`, `ResponseType`, `ConfirmationURL`, `ValidationURL` | [Current C2B page](https://developer.safaricom.co.ke/apis/CustomerToBusiness) and [historical primary PHP SDK](https://github.com/safaricom/mpesa-php-sdk/blob/5effb808e79ba6b3d8631ef83c2b9b31fa450152/src/Mpesa.php). Version entitlement and observed callbacks still require account verification. |
+| B2C | `/mpesa/b2c/v3/paymentrequest`; `OriginatorConversationID`, `InitiatorName`, `SecurityCredential`, `CommandID=BusinessPayment`, `Amount`, `PartyA`, `PartyB`, `Remarks`, `QueueTimeOutURL`, `ResultURL`; sample uses `Occassion` | [Current B2C page](https://developer.safaricom.co.ke/apis/BusinessToCustomer). Sample documents `500.002.1001` duplicate rejection. This does not prove retention duration, payload-conflict semantics, scope or exactly-once behavior. |
+| B2B | `/mpesa/b2b/v1/paymentrequest`; `Initiator`, `SecurityCredential`, `SenderIdentifierType`, **`RecieverIdentifierType`**, `CommandID`, `Amount`, `PartyA`, `PartyB`, `AccountReference`, `Remarks`, callback URLs | [Current primary B2B top-up page](https://developer.safaricom.co.ke/apis/B2CAccountTopUp) confirms the endpoint and misspelled receiver field for its own command. [Buy Goods](https://developer.safaricom.co.ke/apis/BusinessBuyGoods) / [Pay Bill](https://developer.safaricom.co.ke/apis/BusinessPayBill) direct reads exposed only a shell. Their exact current contracts remain an access gate. |
+| TransactionStatus | `/mpesa/transactionstatus/v1/query`; `Initiator`, `SecurityCredential`, `CommandID=TransactionStatusQuery`, `TransactionID` or **`OriginalConversationID`**, `PartyA`, `IdentifierType`, `ResultURL`, `QueueTimeOutURL`, `Remarks`, `Occasion` | [Current status page](https://developer.safaricom.co.ke/apis/TransactionStatus) explicitly describes receipt or conversation lookup. Its parameter table inconsistently spells `QueueTimeoutURL`; sample uses `QueueTimeOutURL`. Test the sample spelling, do not normalize wire names globally. |
+
+B2B experiment candidates preserve PRD `BusinessBuyGoods` with sender 4 / receiver
+2, and `BusinessPayBill` with sender 4 / receiver 4 plus account reference. They
+are **candidates**, not independently verified current command contracts. In
+particular, B2B acceptance of a client `OriginatorConversationID` and duplicate
+rejection are unverified. The harness requires one for identity-equality testing;
+it does not imply the endpoint honors it. Do not silently fall back to a fresh ID.
+
+The B2C page's duplicate sample is stronger evidence than the PRD's assertion
+that sandbox verification already occurred, but is still documentation only.
+No duplicate rejection is evidence of completion. Keep caller identity, proxy
+identity and provider conversation identity separately; their equality is not
+established. Conversation-only status lookup is documented with the different
+request spelling above; which original ID is accepted needs endpoint/environment
+evidence. Until then, receipt lookup is the documented conservative candidate,
+and an attempt with no receipt may require portal reconciliation.
+
+### Callback fields and evidence limits
+
+| Callback/query | Fields to inspect | What cannot be inferred |
+|---|---|---|
+| STK callback | `Body.stkCallback`: `MerchantRequestID`, `CheckoutRequestID`, `ResultCode`, `ResultDesc`; success `CallbackMetadata.Item` entries named `Amount`, `MpesaReceiptNumber`, `TransactionDate`, `PhoneNumber` | [Current STK page](https://developer.safaricom.co.ke/apis/MpesaExpressSimulate). Failure need not carry metadata. No demonstrated callback `BusinessShortCode`; bind shortcode via the stored checkout/quote. |
+| C2B observation | `TransID`, `TransAmount`, `BusinessShortCode`, `BillRefNumber`, `TransTime`, `TransactionType`, `MSISDN` | [Historical primary callback parser](https://github.com/safaricom/mpesa-php-sdk/blob/5effb808e79ba6b3d8631ef83c2b9b31fa450152/src/TransactionCallbacks.php). This is not the STK shape: do not require `ResultCode` or `MpesaReceiptNumber`. Current privacy/version forms need actual fixtures. |
+| Payout result | `Result` envelope with `ResultCode`, `ResultDesc`, `OriginatorConversationID`, `ConversationID`, `TransactionID`, `ResultParameters.ResultParameter` | [Primary callback parser](https://github.com/safaricom/mpesa-php-sdk/blob/5effb808e79ba6b3d8631ef83c2b9b31fa450152/src/TransactionCallbacks.php); [B2C page](https://developer.safaricom.co.ke/apis/BusinessToCustomer). Query/callback identities are not interchangeable. |
+| Status result | `Result` with correlation, result code, `TransactionID`, keyed result parameters such as `ReceiptNo` | [Status page](https://developer.safaricom.co.ke/apis/TransactionStatus). Sample duplicates `DebitPartyName`, and one object has repeated `Key` members. No dependable amount field or receipt-to-amount binding is established. Reject duplicate JSON keys and contradictory fields. ResultCode success alone is insufficient. |
+| STK query result | A checkout status observation over provider HTTPS | No current complete response schema was obtainable from the query page. No evidence it returns/verifies the callback's receipt and amount. Keep receipt/amount attestation gated. |
+
+The C2B page confirms external validation is disabled by default and needs
+provider activation. Registration alone does not activate it. Use `Cancelled`
+as the candidate failure default; verify timeout behavior on the actual shortcode.
+Its documented response is string `ResultCode` with `ResultDesc`; `0` accepts,
+`C2B00011` rejects MSISDN, `C2B00012` account, `C2B00013` amount, `C2B00014` KYC,
+`C2B00015` shortcode, `C2B00016` other error. Its v1/v2 FAQ describes hashed
+versus masked MSISDN. None supplies a signature. Source:
+[Safaricom C2B](https://developer.safaricom.co.ke/apis/CustomerToBusiness).
+
+### Settlement trust decision
+
+Threat model: an internet caller may forge/replay callbacks, discover a callback
+URL in logs, or race a legitimate receipt with an invented quote/amount. A query
+correlation ID is visible application data, not an authenticator. A fresh random
+per-query callback secret, constant-time secret checking, TLS termination,
+provider-approved network restrictions/VPN and strict binding to a durable query
+reduce exposure; HTTPS with ordinary server authentication does not authenticate
+the webhook sender. No retrieved primary contract established signed callbacks,
+an authenticated client certificate, or an authoritative published IP range.
+
+Consequently asynchronous TransactionStatus is not yet independently trustworthy
+settlement evidence. An attacker with query callback access can forge it too.
+Do not label the same callback channel "out of band" solely because an OAuth
+request preceded it. Require an operator-approved provenance mechanism plus
+independently attested receipt, amount, destination/shortcode, finality and quote
+binding. Provider portal/statement evidence with authenticated operator review is
+a candidate fallback, not implemented automation. If a status source omits amount
+or receipt, a success cannot attest those fields from a separate callback.
+
+No callback alone settles a mint. Preserve unverified observations separately
+from transactional receipt allocation; a spoof must not reserve a legitimate
+receipt forever. A timer, query timeout, worker crash, missing result or manual
+escalation never releases a possibly dispatched payout. Both `Failed` **and
+`Unpaid`** from a CDK backend can cause compensation; neither may mean "unknown".
+The machine register keeps independent settlement evidence disabled.
+
+### NUT and custom method/unit compatibility
+
+Pinned NUT revision: **8bde3c0c3684430d852ab543ac8ca72913770dc0** (resolved
+2026-10-20). [NUT-04](https://github.com/cashubtc/nuts/blob/8bde3c0c3684430d852ab543ac8ca72913770dc0/04.md)
+describes general method-specific mint routes/settings.
+[NUT-05](https://github.com/cashubtc/nuts/blob/8bde3c0c3684430d852ab543ac8ca72913770dc0/05.md)
+defines method routes and `[a-z0-9_-]+` method names, matching input units and
+pending melt behavior. Neither defines an M-Pesa wire method. `mpesa` is a local
+custom extension; NUT conformance does not establish support in existing wallets.
+
+At the pinned CDK revision, `crates/cashu/src/nuts/nut00/mod.rs` contains
+`PaymentMethod::Custom(String)`, method validation and `CurrencyUnit::Custom`;
+custom units normalize to lowercase. Thus use `mpesa`, `kes`, `sat` on the wire;
+KES is a custom unit while sat is built in. `hashed_derivation_index` handles
+custom units; the deprecated `derivation_index` returns None for them. Check
+keyset/signatory configuration, routes and supported NUT-04/05 settings in the
+actual mint in stage 19; serialization is not evidence of successful issuance.
+`SettingsResponse.custom` and custom incoming/outgoing protobuf options preserve
+extra JSON, amount and mint quote correlation. The incoming custom options have
+no method-name field in this pin: backend registration/endpoint configuration
+must disambiguate method and unit; never invent a field number.
+
+### Proof-lock source trace and executable boundary
+
+All paths below are relative to [pinned CDK](https://github.com/cashubtc/cdk/tree/9f6d3a3734d7223d10b5553e3591d3f9d5c6c904),
+not the unpinned default branch:
+
+| Boundary | Source / observation |
+|---|---|
+| gRPC protocol | `crates/cdk-common/src/lib.rs`: version `4.0.0`; `grpc.rs`: header `x-cdk-protocol-version`. Actual upstream client uses version interceptor and supports mTLS. The local generated-client fixture does not exercise that interceptor. |
+| Transport errors | `crates/cdk-payment-processor/src/proto/client.rs:make_payment`: tonic errors map to payment errors (`Custom`, or message-based already-paid/pending variants); `check_outgoing_payment` errors are not terminal status responses. Stream disconnect marks stream inactive. |
+| Before dispatch | `crates/cdk/src/mint/melt/melt_saga/mod.rs:setup_melt`: proofs/quote Pending and durable saga. `make_payment` writes the payment-attempt marker before backend I/O. |
+| Pending / gRPC error | Same file: `verify_ambiguous_payment`, `handle_payment_error`, `check_payment_state`: recheck backend state after non-paid response/error. Pending is preserved; Unknown cannot erase an acknowledged Pending. Definitive Unpaid/Failed can release proofs even after initial Pending. Missing lookup IDs cannot justify failure. |
+| Recovery | `crates/cdk/src/mint/start_up_check.rs:recover_from_incomplete_melt_sagas`, `check_melt_payment_status`; `saga_recovery.rs:process_melt_saga_outcome`: Pending/Unknown keep locks, terminal Paid finalizes, authoritative Unpaid/Failed compensates. Slow checks defer startup. |
+| Real upstream tests | `crates/cdk/src/mint/melt/tests/pending_async_melt_tests.rs`: pending/unknown/error, successful-event recovery, bounded waiting, durable lookup IDs, startup with stalled backend; `mint/saga_recovery.rs` regression tests cover compensation/finalization races. Run through `scripts/check-cdk-upstream.py`. |
+
+The compiled local `tests/grpc_contract.rs` uses the exact pinned generated
+schema on loopback: Pending with no payment proof, tonic Unavailable, stream
+failure, stopped-listener reconnection failure, and a fresh server returning
+Pending. This fixture has **no mint database or proof lock implementation**.
+Aborting tonic's listener does not guarantee existing connections stop; the test
+asserts a new connection fails instead of assuming all accepted sockets close.
+
+Upstream regression tests exercise a real mint with synthetic payment backends
+and real proof-state reads. They do not connect our fixture to cdk-mintd, and
+their restart test stops/starts the mint over the retained store rather than
+restarting a process and reopening a production database. Combined gRPC fault,
+durable process restart and custom mpesa/KES/sat mint tests remain a stage 19
+gate; source tracing above is the explicit limit of the stage 01 evidence.
