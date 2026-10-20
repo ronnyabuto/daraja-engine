@@ -4,6 +4,8 @@ pub mod amount;
 pub mod identity;
 pub mod inbound;
 pub mod outbound;
+pub mod repository;
+mod storage;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -32,5 +34,11 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// UTC seconds supplied by the caller; domain transitions never read the wall clock.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Timestamp(pub u64);
+
+impl storage::Stored for Timestamp {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self(serde::Deserialize::deserialize(d)?))
+    }
+}

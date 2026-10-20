@@ -5,17 +5,17 @@ Active model requested: gpt-6.1-sol
 Reasoning requested: medium
 Workspace: /home/officialnyabuto/Desktop/daraja-engine
 Assigned Git branch/worktree: actual main at /home/officialnyabuto/Desktop/daraja-engine; preserved. Stage 00 recorded feat/00-workspace, but stage 01 found main at 1120bf42166e6c1b4df8b793bf0520a7b4231be4 with a clean tree. Successful origin fetch confirmed origin/main at the same commit. No branch reset or switch was performed.
-Current stage: 02
-Implementation state: DONE (stage 02 locally verified; external gates remain disabled)
+Current stage: 03
+Implementation state: DONE (stage 03 locally verified; external gates remain disabled)
 
-Stages 00–02 are locally verified. Stage 02 adds exact financial domain types, guarded transitions, receipt allocation and settlement/event contracts with focused invariant tests. Stage 01 adds protocol research, a compiled loopback gRPC harness, an opt-in sandbox probe, fail-closed capability register and real pinned CDK proof-state regression execution. No live provider trial or combined Daraja/cdk-mintd integration has run.
+Stages 00–03 are locally verified. Stage 03 adds file-backed SQLx SQLite WAL persistence, ordered migrations, transactional receipt settlement/events, CAS, immutable dispatch preparation and leased recovery work. Stage 02 adds exact financial domain types, guarded transitions, receipt allocation and settlement/event contracts with focused invariant tests. Stage 01 adds protocol research, a compiled loopback gRPC harness, an opt-in sandbox probe, fail-closed capability register and real pinned CDK proof-state regression execution. No live provider trial or combined Daraja/cdk-mintd integration has run.
 
 | Stage | State | Evidence |
 |---|---|---|
 | 00 workspace | DONE | [00-workspace.md](evidence/00-workspace.md) |
 | 01 protocol-gates | DONE | [01-protocol-gates.md](evidence/01-protocol-gates.md) |
 | 02 domain | DONE | [02-domain.md](evidence/02-domain.md) |
-| 03 sqlite | NOT_STARTED | — |
+| 03 sqlite | DONE | [03-sqlite.md](evidence/03-sqlite.md) |
 | 04 auth-crypto | NOT_STARTED | — |
 | 05 collection-transport | NOT_STARTED | — |
 | 06 payout-transport | NOT_STARTED | — |
@@ -41,6 +41,15 @@ Stages 00–02 are locally verified. Stage 02 adds exact financial domain types,
 | 26 packaging | NOT_STARTED | — |
 | 27 live-verification | NOT_STARTED | — |
 | 28 final-closure | NOT_STARTED | — |
+
+## Stage 03 handoff
+
+- Preserved assigned main and checkout, initially clean. New-feature continuation check: successful escalated `git fetch origin`; HEAD and origin/main both `fe468cb9e8556cde1294b91f2db15cd800879a13`. No switch/reset, delegation, commit or push. Verification used dirty/uncommitted stage 03 changes on that revision, including new files.
+- Added two SQLx migrations and daraja-core repository; docs/schema.md records normalized identities plus private snapshots, WAL/FULL/foreign-key/busy settings, short transactions, CAS, receipt verification/allocation, exception custody, atomic event outbox, immutable payout/idempotency preparation, balance reservation/audit and lease fencing. No provider I/O or automatic resend.
+- Final checks: workspace tests passed (23 domain + 17 SQLite integration entries, including 2 child entry helpers, + 1 connection-settings test + 3 protocol integration tests); fmt, workspace/all-target Clippy with warnings denied, foundation check, 6 probe tests and whitespace check passed. File-backed evidence includes competing processes, migration upgrade/checksum rejection, injected settlement rollback, abrupt exit before dispatch and uncommitted-write recovery. See evidence/03-sqlite.md.
+- R09/R10 are DONE locally. R11 remains IN_PROGRESS only for later provider workers and full saga recovery; its stage 03 persistence primitives are locally verified. No external gates changed; SETTLE, duplicate probes, LIVE and other provider/CDK/legal gates remain disabled or BLOCKED externally.
+- Next task: execute docs/implementation/prompts/04-auth-crypto.md in this same checkout. Preserve branch/worktree and pending changes. Do not repeat branch setup or advance beyond that one numbered stage.
+- The user subsequently authorized committing and pushing stage 03 to main. The stage 03 code revision is the commit containing this handoff; local verification above preceded that commit. No deployment or live money movement was authorized.
 
 ## Stage 02 handoff
 

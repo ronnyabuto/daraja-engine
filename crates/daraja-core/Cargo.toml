@@ -7,9 +7,14 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "=3.27.0"

@@ -21,7 +21,14 @@ prost-build = "=0.14.1"
 prost-types = "=0.14.1"
 protoc-bin-vendored = "=3.2.0"
 sha2 = "=0.10.9"
-sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }
+sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+[workspace.dependencies.serde]
+version = "=1.0.229"
+features = ["derive"]
+
+[workspace.dependencies.serde_json]
+version = "=1.0.154"

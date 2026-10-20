@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 use std::collections::BTreeMap;
 
 use crate::{
@@ -6,7 +8,7 @@ use crate::{
     identity::{Id, ReceiptId},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InboundState {
     Issued,
     StkSent,
@@ -17,7 +19,7 @@ pub enum InboundState {
     Paid,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct QuoteTerms {
     pub expected: Amount,
     pub credit: Amount,
@@ -46,7 +48,7 @@ impl QuoteTerms {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttemptState {
     Dispatching,
     Sent,
@@ -55,7 +57,7 @@ pub enum AttemptState {
     Failed,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct StkAttempt {
     id: Id,
     started_at: Timestamp,
@@ -108,7 +110,7 @@ impl StkAttempt {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct InboundQuote {
     id: Id,
     account_ref: Id,
@@ -142,6 +144,13 @@ impl InboundQuote {
     pub fn id(&self) -> &Id {
         &self.id
     }
+    pub fn account_ref(&self) -> &Id {
+        &self.account_ref
+    }
+    pub fn shortcode(&self) -> &Id {
+        &self.shortcode
+    }
+
     pub fn state(&self) -> InboundState {
         self.state
     }
@@ -274,14 +283,14 @@ impl InboundQuote {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub enum DepositRail {
     Stk { checkout_request: Id },
     C2b { account_ref: Id },
 }
 
 /// An observation is not a ledger reservation, even if it claims success.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct ReceiptObservation {
     pub observation_id: Id,
     pub claimed_receipt: ReceiptId,
@@ -293,13 +302,13 @@ pub struct ReceiptObservation {
 
 /// A reference to independently reviewed evidence, not a callback/query correlation ID.
 /// Construction is an explicit trusted-verifier boundary, not provider verification.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub enum EvidenceSource {
     AuthenticatedProviderRecord(Id),
     ReviewedStatement(Id),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct DepositAttestation {
     pub source: EvidenceSource,
     pub receipt: ReceiptId,
@@ -311,7 +320,7 @@ pub struct DepositAttestation {
     pub verified_at: Timestamp,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct VerifiedDeposit(DepositAttestation);
 
 impl VerifiedDeposit {
@@ -330,7 +339,7 @@ impl VerifiedDeposit {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepositState {
     UnderpaidHeld,
     OverpaidHeld,
@@ -342,20 +351,20 @@ pub enum DepositState {
     Settled,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub enum Allocation {
     Quote(Id),
     Exception,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct ConfirmedReceipt {
     pub deposit: VerifiedDeposit,
     pub allocation: Allocation,
     pub state: DepositState,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct SettlementEvent {
     /// One settlement event per quote; stable replay identity.
     pub quote_id: Id,
@@ -368,9 +377,9 @@ pub struct SettlementEvent {
 /// receipt allocations, quote mutation and this outbox in one transaction/CAS.
 #[derive(Default)]
 pub struct Accounting {
-    quotes: BTreeMap<Id, InboundQuote>,
+    pub(crate) quotes: BTreeMap<Id, InboundQuote>,
     observations: Vec<ReceiptObservation>,
-    receipts: BTreeMap<ReceiptId, ConfirmedReceipt>,
+    pub(crate) receipts: BTreeMap<ReceiptId, ConfirmedReceipt>,
     events: BTreeMap<Id, SettlementEvent>,
 }
 
@@ -544,5 +553,260 @@ impl Accounting {
         }
         self.events.insert(id.clone(), event.clone());
         Ok(event)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "InboundState")]
+enum StoredInboundState {
+    Issued,
+    StkSent,
+    Verifying,
+    UnderpaidHeld,
+    OverpaidHeld,
+    SettlementHeld,
+    Paid,
+}
+impl crate::storage::Stored for InboundState {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredInboundState::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "QuoteTerms")]
+struct StoredQuoteTerms {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    expected: Amount,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    credit: Amount,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    quote_expires_at: Timestamp,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    fx: Option<FxSnapshot>,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    tariff: TariffSnapshot,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    hold_until: Timestamp,
+}
+impl crate::storage::Stored for QuoteTerms {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredQuoteTerms::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "AttemptState")]
+enum StoredAttemptState {
+    Dispatching,
+    Sent,
+    Unknown,
+    Completed,
+    Failed,
+}
+impl crate::storage::Stored for AttemptState {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredAttemptState::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "StkAttempt")]
+struct StoredStkAttempt {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    id: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    started_at: Timestamp,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    next_poll_at: Timestamp,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    resend_after: Timestamp,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    state: AttemptState,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    caller_request: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    merchant_request: Option<Id>,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    checkout_request: Option<Id>,
+}
+impl crate::storage::Stored for StkAttempt {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredStkAttempt::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "InboundQuote")]
+struct StoredInboundQuote {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    id: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    account_ref: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    shortcode: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    terms: QuoteTerms,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    state: InboundState,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    attempts: Vec<StkAttempt>,
+}
+impl crate::storage::Stored for InboundQuote {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredInboundQuote::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "DepositRail")]
+enum StoredDepositRail {
+    Stk {
+        #[serde(deserialize_with = "crate::storage::deserialize")]
+        checkout_request: Id,
+    },
+    C2b {
+        #[serde(deserialize_with = "crate::storage::deserialize")]
+        account_ref: Id,
+    },
+}
+impl crate::storage::Stored for DepositRail {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredDepositRail::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "ReceiptObservation")]
+struct StoredReceiptObservation {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    observation_id: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    claimed_receipt: ReceiptId,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    claimed_quote: Option<Id>,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    claimed_amount: Amount,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    rail: DepositRail,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    observed_at: Timestamp,
+}
+impl crate::storage::Stored for ReceiptObservation {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredReceiptObservation::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "EvidenceSource")]
+enum StoredEvidenceSource {
+    AuthenticatedProviderRecord(#[serde(deserialize_with = "crate::storage::deserialize")] Id),
+    ReviewedStatement(#[serde(deserialize_with = "crate::storage::deserialize")] Id),
+}
+impl crate::storage::Stored for EvidenceSource {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredEvidenceSource::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "DepositAttestation")]
+struct StoredDepositAttestation {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    source: EvidenceSource,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    receipt: ReceiptId,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    quote_id: Option<Id>,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    amount: Amount,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    shortcode: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    rail: DepositRail,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    received_at: Timestamp,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    verified_at: Timestamp,
+}
+impl crate::storage::Stored for DepositAttestation {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredDepositAttestation::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "VerifiedDeposit")]
+struct StoredVerifiedDeposit(
+    #[serde(deserialize_with = "crate::storage::deserialize")] DepositAttestation,
+);
+impl crate::storage::Stored for VerifiedDeposit {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredVerifiedDeposit::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "DepositState")]
+enum StoredDepositState {
+    UnderpaidHeld,
+    OverpaidHeld,
+    OrphanUnclaimed,
+    LateHeld,
+    FxExpiredHeld,
+    SettlementHeld,
+    Verified,
+    Settled,
+}
+impl crate::storage::Stored for DepositState {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredDepositState::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "Allocation")]
+enum StoredAllocation {
+    Quote(#[serde(deserialize_with = "crate::storage::deserialize")] Id),
+    Exception,
+}
+impl crate::storage::Stored for Allocation {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredAllocation::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "ConfirmedReceipt")]
+struct StoredConfirmedReceipt {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    deposit: VerifiedDeposit,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    allocation: Allocation,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    state: DepositState,
+}
+impl crate::storage::Stored for ConfirmedReceipt {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredConfirmedReceipt::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "SettlementEvent")]
+struct StoredSettlementEvent {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    quote_id: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    credit: Amount,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    receipts: Vec<ReceiptId>,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    settled_at: Timestamp,
+}
+impl crate::storage::Stored for SettlementEvent {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredSettlementEvent::deserialize(d)
     }
 }

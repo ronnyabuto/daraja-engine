@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
@@ -5,7 +7,7 @@ use sha2::{Digest, Sha256};
 use crate::{Error, amount::Amount};
 
 /// Opaque identity; Debug deliberately omits values which may contain customer data.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Id(String);
 
 impl Id {
@@ -28,7 +30,7 @@ impl std::fmt::Debug for Id {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PayloadHash([u8; 32]);
 
 impl PayloadHash {
@@ -41,7 +43,7 @@ impl PayloadHash {
 }
 
 /// Provider receipt identities use one uppercase ASCII alphanumeric representation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ReceiptId(Id);
 
 impl ReceiptId {
@@ -59,7 +61,7 @@ impl ReceiptId {
 
 /// Canonical v1 domain payload: ordered, length-prefixed UTF-8 fields, big-endian
 /// integers, explicit unit. Transport adapters must persist exact wire bytes separately.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Serialize, Clone, PartialEq, Eq)]
 pub struct RequestPayload {
     pub operation: Id,
     pub quote_id: Id,
@@ -107,14 +109,14 @@ impl RequestPayload {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RequestKey {
     pub caller: Id,
     pub operation: Id,
     pub key: Id,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct RequestBinding {
     pub payload_hash: PayloadHash,
     pub operation_id: Id,
@@ -150,7 +152,7 @@ impl RequestRegistry {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct Correlation {
     pub caller_request: Id,
     pub originator_conversation: Id,
@@ -174,5 +176,102 @@ impl Correlation {
         self.provider_originator = Some(originator);
         self.provider_conversation = Some(conversation);
         Ok(())
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "Id")]
+struct StoredId(#[serde(deserialize_with = "crate::storage::deserialize")] String);
+impl crate::storage::Stored for Id {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredId::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "PayloadHash")]
+struct StoredPayloadHash(#[serde(deserialize_with = "crate::storage::deserialize")] [u8; 32]);
+impl crate::storage::Stored for PayloadHash {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredPayloadHash::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "ReceiptId")]
+struct StoredReceiptId(#[serde(deserialize_with = "crate::storage::deserialize")] Id);
+impl crate::storage::Stored for ReceiptId {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredReceiptId::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "RequestPayload")]
+struct StoredRequestPayload {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    operation: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    quote_id: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    destination: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    amount: Amount,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    tariff_version: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    options: BTreeMap<String, String>,
+}
+impl crate::storage::Stored for RequestPayload {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredRequestPayload::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "RequestKey")]
+struct StoredRequestKey {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    caller: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    operation: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    key: Id,
+}
+impl crate::storage::Stored for RequestKey {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredRequestKey::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "RequestBinding")]
+struct StoredRequestBinding {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    payload_hash: PayloadHash,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    operation_id: Id,
+}
+impl crate::storage::Stored for RequestBinding {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredRequestBinding::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "Correlation")]
+struct StoredCorrelation {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    caller_request: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    originator_conversation: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    provider_originator: Option<Id>,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    provider_conversation: Option<Id>,
+}
+impl crate::storage::Stored for Correlation {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredCorrelation::deserialize(d)
     }
 }

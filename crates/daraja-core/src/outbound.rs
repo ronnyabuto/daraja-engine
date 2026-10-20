@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 use crate::{
     Error, Timestamp,
     amount::{Amount, TariffSnapshot},
@@ -5,7 +7,7 @@ use crate::{
     inbound::EvidenceSource,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutboundState {
     Dispatching,
     UnknownInFlight,
@@ -15,7 +17,7 @@ pub enum OutboundState {
     ManualReconciliationRequired,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CdkPaymentState {
     Pending,
     Paid,
@@ -33,7 +35,7 @@ impl OutboundState {
 }
 
 /// Frozen before dispatch. Persistence must commit this record before provider I/O.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Serialize, Clone, PartialEq, Eq)]
 pub struct DispatchRecord {
     operation_id: Id,
     payload: RequestPayload,
@@ -98,7 +100,7 @@ impl DispatchRecord {
 }
 
 /// Final evidence must refer to this exact dispatch. Correlation alone is not provenance.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PayoutAttestation {
     pub source: EvidenceSource,
     pub operation_id: Id,
@@ -108,7 +110,7 @@ pub struct PayoutAttestation {
     pub outcome: FinalOutcome,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub enum FinalOutcome {
     Paid {
         receipt: ReceiptId,
@@ -119,7 +121,7 @@ pub enum FinalOutcome {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ambiguity {
     TransportError,
     Http500,
@@ -129,7 +131,7 @@ pub enum Ambiguity {
     WorkerRecovery,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct Payout {
     dispatch: DispatchRecord,
     correlation: Correlation,
@@ -252,5 +254,136 @@ impl Payout {
         };
         self.final_evidence = Some(evidence);
         Ok(())
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "OutboundState")]
+enum StoredOutboundState {
+    Dispatching,
+    UnknownInFlight,
+    Pending,
+    Paid,
+    Failed,
+    ManualReconciliationRequired,
+}
+impl crate::storage::Stored for OutboundState {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredOutboundState::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "CdkPaymentState")]
+enum StoredCdkPaymentState {
+    Pending,
+    Paid,
+    Failed,
+}
+impl crate::storage::Stored for CdkPaymentState {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredCdkPaymentState::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "DispatchRecord")]
+struct StoredDispatchRecord {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    operation_id: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    payload: RequestPayload,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    hash: PayloadHash,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    wire_body: Vec<u8>,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    tariff: TariffSnapshot,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    reserved: Amount,
+}
+impl crate::storage::Stored for DispatchRecord {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredDispatchRecord::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "PayoutAttestation")]
+struct StoredPayoutAttestation {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    source: EvidenceSource,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    operation_id: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    payload_hash: PayloadHash,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    amount: Amount,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    destination: Id,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    outcome: FinalOutcome,
+}
+impl crate::storage::Stored for PayoutAttestation {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredPayoutAttestation::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "FinalOutcome")]
+enum StoredFinalOutcome {
+    Paid {
+        #[serde(deserialize_with = "crate::storage::deserialize")]
+        receipt: ReceiptId,
+    },
+    DefinitivelyNotExecuted {
+        #[serde(deserialize_with = "crate::storage::deserialize")]
+        evidence_record: Id,
+    },
+}
+impl crate::storage::Stored for FinalOutcome {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredFinalOutcome::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "Ambiguity")]
+enum StoredAmbiguity {
+    TransportError,
+    Http500,
+    Http503,
+    Timeout,
+    QueueTimeout,
+    WorkerRecovery,
+}
+impl crate::storage::Stored for Ambiguity {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredAmbiguity::deserialize(d)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(remote = "Payout")]
+struct StoredPayout {
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    dispatch: DispatchRecord,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    correlation: Correlation,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    state: OutboundState,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    started_at: Timestamp,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    next_check_at: Timestamp,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    manual_after: Timestamp,
+    #[serde(deserialize_with = "crate::storage::deserialize")]
+    final_evidence: Option<PayoutAttestation>,
+}
+impl crate::storage::Stored for Payout {
+    fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        StoredPayout::deserialize(d)
     }
 }

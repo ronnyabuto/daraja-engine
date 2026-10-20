@@ -8,6 +8,11 @@ claims: no callback alone settles, no duplicate error proves payment, and no
 timer proves nonexecution. Stage 01 local acceptance is DONE. All external
 [capability gates](verification-gates.json) remain disabled.
 
+Stage 03 now implements the persistence follow-through described below; see
+[schema and recovery contracts](schema.md) and
+[local SQLite evidence](implementation/evidence/03-sqlite.md). References below to
+future stage 03 work describe the original stage 02 handoff.
+
 ## Boundary and evidence
 
 This stage implements pure domain transitions, not transport, persistence, jobs
