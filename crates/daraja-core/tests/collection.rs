@@ -842,3 +842,6 @@ mod payout_contract;
 
 #[path = "support/outbound_dispatch.rs"]
 mod outbound_dispatch;
+
+#[path = "support/liquidity_fixture.rs"]
+mod liquidity_fixture;

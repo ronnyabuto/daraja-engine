@@ -50,6 +50,7 @@ impl From<serde_json::Error> for RepositoryError {
 }
 mod dispatch;
 mod exceptions;
+mod liquidity;
 mod outbound_reconcile;
 mod valuation;
 pub use exceptions::{DepositPolicy, RefundAuthorization, RefundRequest};
@@ -650,13 +651,14 @@ impl Repository {
     /// Successful return is the commit-before-I/O crash boundary. Recovery only
     /// schedules reconciliation, never automatic resubmission.
     pub async fn prepare_payout(&self, key: &RequestKey, payout: &Payout) -> Result<Id> {
-        Ok(self.prepare_payout_claim(key, payout, None).await?.0)
+        Ok(self.prepare_payout_claim(key, payout, None, None).await?.0)
     }
     pub(crate) async fn prepare_payout_claim(
         &self,
         key: &RequestKey,
         payout: &Payout,
         quoted_endpoint: Option<&str>,
+        sweep: Option<crate::liquidity::SweepClaim<'_>>,
     ) -> Result<(Id, bool)> {
         let d = payout.dispatch();
         if key.operation != d.payload().operation {
@@ -707,10 +709,12 @@ impl Repository {
         sqlx::query("INSERT INTO outbound_payouts(id,caller_request,state,payload_hash,dispatch,wire_body,next_check_at,manual_after,data) VALUES(?,?,?,?,?,?,?,?,?)")
             .bind(d.operation_id().as_str()).bind(payout.correlation().caller_request.as_str()).bind(state(&payout.state())?).bind(d.hash().as_bytes().as_slice()).bind(encode(d)?).bind(d.wire_body()).bind(time(payout.next_check_at())?).bind(time(payout.manual_after())?).bind(encode(payout)?).execute(&mut *tx).await?;
         if let Some(endpoint) = quoted_endpoint {
-            let quote = d.quote().ok_or(Error::EvidenceMismatch)?;
+            if d.quote().is_none() && sweep.is_none() {
+                return Err(Error::EvidenceMismatch.into());
+            }
             sqlx::query("INSERT INTO payout_dispatches(payout_id,quote_id,command,endpoint) VALUES(?,?,?,?)")
                 .bind(d.operation_id().as_str())
-                .bind(quote.id().as_str())
+                .bind(d.quote().map(|q| q.id().as_str()))
                 .bind(
                     serde_json::from_slice::<serde_json::Value>(d.wire_body())?["CommandID"]
                         .as_str()
@@ -719,6 +723,11 @@ impl Repository {
                 .bind(endpoint)
                 .execute(&mut *tx)
                 .await?;
+        }
+        if let Some(sweep) = sweep {
+            liquidity::admit_sweep(&mut tx, payout, sweep).await?;
+        } else {
+            liquidity::admit_payout(&mut tx, payout).await?;
         }
         bind_request(&mut tx, key, d.payload(), d.operation_id()).await?;
         sqlx::query(

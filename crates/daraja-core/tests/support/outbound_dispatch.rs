@@ -53,6 +53,7 @@ async fn quote(repo: &Repository, name: &str, target: &str) {
         Timestamp(time().0 + 300),
     )
     .unwrap();
+    super::liquidity_fixture::fund(repo).await;
     repo.save_payment_quote(&q, time()).await.unwrap();
 }
 fn payout_client<T: HttpTransport>(transport: T, base: reqwest::Url) -> PayoutClient<T> {
@@ -773,3 +774,6 @@ async fn socket_disconnect_after_receiving_request_is_unknown_and_never_replayed
 
 #[path = "outbound_reconcile.rs"]
 mod reconcile_stage13;
+
+#[path = "liquidity.rs"]
+mod liquidity_stage14;

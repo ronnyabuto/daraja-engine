@@ -1,6 +1,6 @@
 # Implementation roadmap
 
-Stages 00–13 are implemented and locally verified. This is a development
+Stages 00–14 are implemented and locally verified. This is a development
 workspace, not a runnable payment service or a production-ready mint integration.
 
 | Stages | Scope | State |
@@ -17,7 +17,8 @@ workspace, not a runnable payment service or a production-ready mint integration
 | 11 | Separate tariff schedules, immutable outgoing valuation, exact KES/sat conversions and pluggable FX | Locally verified; live/CDK unit gates disabled |
 | 12 | Idempotent quoted payout dispatch, durable acknowledgment/callback correlation and crash recovery | Locally verified; live gates disabled |
 | 13 | Leased outbound reconciliation, evidence-scoped probes, bounded polling and durable manual alerts | Locally verified; live gates disabled |
-| 14–15 | Liquidity and operator recovery | Planned |
+| 14 | Separate balance telemetry, transactional quote float reservations and opt-in bounded linked sweeps | Locally verified; live balance/sweep gates disabled |
+| 15 | Authenticated operator recovery | Planned |
 | 16 | Optional PostgreSQL parity | Planned |
 | 17–19 | CDK service implementation and real mint/proof-lock integration | Planned |
 | 20–24 | Daemon REST/gRPC, reference clients and consumer examples | Planned |
@@ -32,8 +33,9 @@ independent evidence checks, durable notification replay, exception/refund races
 KES grace, risk holds/reversal alerts, tariff/FX boundaries, conversion/fee backing,
 frozen quote/fee audit recovery, deadline phases, throttling,
 durable outbound claims, early payout callbacks, dispatch crashes/socket disconnects,
-outbound probe/status crashes, manual escalation, late verified resolution
-and TRACE redaction.
+outbound probe/status crashes, manual escalation, late verified resolution,
+liquidity reservation races, balance callback ordering, fee/stale-float admission,
+sweep limits/recovery and TRACE redaction.
 See [build and verification commands](../README.md#build-locally) to reproduce them.
 
 Inbound status workers and restart reconciliation are implemented as a library;

@@ -22,6 +22,8 @@ Implemented and locally tested:
 - Leased inbound reconciliation, transactional verified settlement and durable
   notification replay: [reconciliation](../../docs/inbound-reconcile.md).
 
-Live independent provider verification and outbound reconciliation remain gated. Local tests do not establish live provider
-permissions or settlement evidence. See the [roadmap](../../docs/roadmap.md) and
+Live independent provider verification remains gated. Local tests do not establish
+live provider permissions or settlement evidence. Liquidity telemetry, quote
+reservations and optional bounded sweeps are library APIs:
+[liquidity contract](../../docs/liquidity.md). See the [roadmap](../../docs/roadmap.md) and
 [verification gates](../../docs/verification-gates.md).

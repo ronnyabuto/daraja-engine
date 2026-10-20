@@ -29,7 +29,8 @@ The existing [payout client](payout-transport.md) performs one submission with n
 retry loop. Neither repeated MakePayment nor a reconciliation job grants another
 send. B2B command/caller-ID and 01-phone gates remain enforced by that client and
 default off. Ordinary local 2547 fixtures do not establish production account
-permissions. No sweep or refund execution is wired by this stage.
+permissions. Optional internal sweeps now reuse this saga through the
+[liquidity](liquidity.md) gates. Refund execution remains gated.
 
 Replays read the saved operation before expiry validation or wire construction.
 They preserve original JSON bytes, initiator, encrypted SecurityCredential,
@@ -89,7 +90,8 @@ SQLite or mock tests.
 
 [Outbound reconciliation](outbound-reconcile.md) now implements status polling,
 manual alerts and separately evidence-approved same-operation probing;
-stage 14 owns liquidity admission and stage 18 the CDK adapter. All external
+[liquidity](liquidity.md) supplies quote/dispatch float admission and optional
+linked sweeps; stage 18 owns the CDK adapter. All external
 [capability gates](verification-gates.md) remain disabled. See
 `cargo test -p daraja-core --test collection outbound_dispatch --locked --offline`
 for loopback provider/webhook and file-SQLite acceptance, including abrupt child

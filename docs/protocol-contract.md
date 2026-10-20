@@ -283,3 +283,13 @@ duplicate error is Pending. Callback/query success remains an untrusted hint;
 independent exact-dispatch evidence with an actual receipt authorizes Paid,
 while definitive non-execution evidence is required for Failed. Manual deadlines
 produce a durable alert and Pending, preserving the pinned CDK proof-safety mapping.
+
+### Liquidity observations and linked sweeps
+
+[Liquidity](liquidity.md) adds no assumed provider balance layout or authenticity.
+BALANCE-SOURCE requires independently verified account/available-KES evidence at
+or after query start; its default verifier is unavailable. AccountBalance replies
+bind both acknowledged IDs and cannot renew freshness through late delivery.
+Optional sweep orchestration preserves the exact gated MMF command, linked
+accounts, one-send saga and ambiguity rules. SWEEP, WIRE-MMF and WIRE-B2B-ID remain
+disabled, independently of any duplicate-probe guarantee. No live transfer ran.

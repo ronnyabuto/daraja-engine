@@ -241,3 +241,14 @@ QueueTimeOutURL can move acknowledged Pending to UnknownInFlight. Both project
 to CDK Pending; terminal evidence and manual states are preserved. Recovery of
 DISPATCHING never grants another send. Early callbacks remain untrusted inbox
 observations and are correlated with acknowledgment IDs transactionally.
+
+## Liquidity admission and recovery
+
+[Liquidity accounting](liquidity.md) reserves principal plus tariff when an outgoing
+quote is saved. Undispatched holds expire at quote expiry; dispatch atomically
+converts them to payout reservations after checking fresh disbursement float.
+A post-OAuth guard rechecks immediately before HTTP. Any later ambiguity remains
+Pending with liabilities held, including internal linked sweeps. A Paid payout
+still debits older snapshots until a verified query started after its resolution
+supersedes it. Only independently definitive nonexecution restores capacity
+against the old observation. Collection float never backs customer payout admission.

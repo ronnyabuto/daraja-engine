@@ -1,7 +1,7 @@
 # SQLite repository
 
 Owner: `daraja-core::repository::Repository`; domain rules remain in `inbound`,
-`outbound`, `amount` and `identity`. Seven ordered, embedded SQLx migrations live in
+`outbound`, `amount` and `identity`. Nine ordered, embedded SQLx migrations live in
 `crates/daraja-core/migrations`. SQLx records/checks their versions and checksums;
 `build.rs` watches the directory. Never edit an applied migration: add a new one.
 Opening a database applies missing migrations and rejects checksum mismatch.
@@ -184,3 +184,22 @@ state, audit and worker completion are atomic. Missing/invalid evidence or a
 failed commit retains Pending and its reservation. Manual jobs remain available
 for independently verified late evidence, with automated probe/status work stopped.
 See [outbound reconciliation](outbound-reconcile.md) for clocks, gates and trust.
+
+## Stage 14 liquidity
+
+Migration 0009 adds `liquidity_policy`, immutable-account/body `balance_queries`,
+`quote_float_reservations`, bounded `liquidity_alerts` and immutable `float_sweeps`.
+It rebuilds payout admission and its observation/link children together, preserving
+existing rows and foreign keys; only internal sweep admission may have a NULL
+quote and the exact sweep command. Customer quoted admission keeps its unique
+quote binding. The migration does not manufacture balance evidence or holds for
+historical unconsumed quotes. Existing pending liabilities remain counted.
+
+Quote save/check/reservation is one writer transaction. Dispatch converts that
+hold and creates the existing payout reservation in one transaction; failure rolls
+back both. Only undispatched holds expire. Paid release times serve as conservative
+snapshot debit watermarks, and unresolved payouts never age out of accounting.
+Latest verified query sequence prevents out-of-order callbacks from replacing
+newer observations. Sweep admission includes snapshot uniqueness, unresolved
+exclusion, cooldown and gross daily limits under that same writer lock.
+See [liquidity](liquidity.md) for trust, freshness and account separation.

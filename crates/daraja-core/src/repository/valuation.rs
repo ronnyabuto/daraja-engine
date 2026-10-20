@@ -21,6 +21,7 @@ impl Repository {
             .bind(encode(quote)?)
             .execute(&mut *tx)
             .await?;
+        super::liquidity::reserve_quote(&mut tx, quote, now).await?;
         tx.commit().await?;
         Ok(())
     }

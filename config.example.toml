@@ -27,6 +27,7 @@ b2b_pay_bill = false
 b2b_caller_id = false
 b2c_phone_01 = false
 balance_till = false
+verified_balance_source = false
 mmf_transfer_command = false
 cdk_proof_safety = false
 mpesa_kes = false

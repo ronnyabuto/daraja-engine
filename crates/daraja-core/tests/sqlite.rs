@@ -1,3 +1,5 @@
+#[path = "support/liquidity_fixture.rs"]
+mod liquidity_fixture;
 use daraja_core::{
     Error, Timestamp,
     amount::{Amount, TariffSnapshot, Unit},
@@ -95,6 +97,7 @@ async fn fixture() -> (TempDir, Repository) {
     let r = Repository::open(dir.path().join("ledger.sqlite"))
         .await
         .unwrap();
+    liquidity_fixture::fund(&r).await;
     (dir, r)
 }
 async fn raw(path: &Path) -> SqliteConnection {
@@ -128,7 +131,7 @@ async fn migrations_reopen_and_connection_settings() {
         InboundState::Issued
     );
     let mut c = raw(&dir.path().join("ledger.sqlite")).await;
-    assert_eq!(count(&mut c, "_sqlx_migrations").await, 8);
+    assert_eq!(count(&mut c, "_sqlx_migrations").await, 9);
     assert_eq!(
         sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
             .fetch_one(&mut c)
@@ -136,7 +139,7 @@ async fn migrations_reopen_and_connection_settings() {
             .unwrap(),
         "wal"
     );
-    assert_eq!(count(&mut c, "audit_records").await, 1);
+    assert_eq!(count(&mut c, "audit_records").await, 3);
     r.close().await;
 }
 
@@ -297,7 +300,7 @@ async fn database_failure_rolls_back_all_settlement_writes() {
     );
     assert_eq!(count(&mut c, "mpesa_receipts_ledger").await, 0);
     assert_eq!(count(&mut c, "settlement_events").await, 0);
-    assert_eq!(count(&mut c, "audit_records").await, 1);
+    assert_eq!(count(&mut c, "audit_records").await, 3);
     sqlx::query("DROP TRIGGER fail_event")
         .execute(&mut c)
         .await
@@ -562,6 +565,7 @@ async fn account_attempt_and_provider_correlations_are_database_unique() {
 #[tokio::test]
 async fn expired_job_is_retried_and_stale_worker_is_fenced() {
     let (_dir, r) = fixture().await;
+    liquidity_fixture::fund(&r).await;
     r.prepare_payout(&key(), &payout("operation", 100))
         .await
         .unwrap();
@@ -587,6 +591,7 @@ async fn crash_child() {
         return;
     };
     let r = Repository::open(&path).await.unwrap();
+    liquidity_fixture::fund(&r).await;
     r.prepare_payout(&key(), &payout("operation", 100))
         .await
         .unwrap();
@@ -667,7 +672,7 @@ async fn ordered_upgrade_preserves_rows_and_checksum_tampering_fails_closed() {
     assert_eq!(r.quote(&id("quote")).await.unwrap().0, q);
     r.close().await;
     let mut c = raw(&path).await;
-    assert_eq!(count(&mut c, "_sqlx_migrations").await, 8);
+    assert_eq!(count(&mut c, "_sqlx_migrations").await, 9);
     sqlx::query("UPDATE _sqlx_migrations SET checksum=x'00' WHERE version=1")
         .execute(&mut c)
         .await

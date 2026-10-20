@@ -8,6 +8,7 @@ pub mod crypto;
 pub mod fx;
 pub mod identity;
 pub mod inbound;
+pub mod liquidity;
 pub mod outbound;
 pub mod payout;
 pub mod reconcile;
@@ -34,6 +35,8 @@ pub enum Error {
     FxExpired,
     SettlementHeld,
     AmountMismatch,
+    LiquidityUnavailable,
+    InsufficientFloat,
 }
 
 impl std::fmt::Display for Error {

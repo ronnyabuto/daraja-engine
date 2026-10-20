@@ -1,3 +1,5 @@
+#[path = "support/liquidity_fixture.rs"]
+mod liquidity_fixture;
 use daraja_core::{
     Error, Timestamp,
     amount::{Amount, FxSnapshot, Unit},
@@ -291,6 +293,7 @@ async fn frozen_quote_restart_dispatch_expiry_and_actual_fee_audit() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db.sqlite");
     let repo = Repository::open(&path).await.unwrap();
+    liquidity_fixture::fund(&repo).await;
     let q = quote(Unit::Sat);
     repo.save_payment_quote(&q, Timestamp(110)).await.unwrap();
     drop(repo);
@@ -325,7 +328,7 @@ async fn frozen_quote_restart_dispatch_expiry_and_actual_fee_audit() {
     let d = DispatchRecord::new(
         id("operation"),
         payload,
-        vec![1],
+        br#"{"PartyA":"600000"}"#.to_vec(),
         q.tariff().clone(),
         q.principal().checked_add(q.tariff().fee).unwrap(),
     )
@@ -422,7 +425,7 @@ async fn frozen_quote_restart_dispatch_expiry_and_actual_fee_audit() {
         let d = DispatchRecord::new(
             id(name),
             payload,
-            vec![1],
+            br#"{"PartyA":"600000"}"#.to_vec(),
             q2.tariff().clone(),
             q2.principal().checked_add(q2.tariff().fee).unwrap(),
         )

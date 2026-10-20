@@ -155,6 +155,10 @@ pub struct PayoutAcknowledgment {
 pub trait PayoutPersistence: Send + Sync {
     fn prepare(&self, payout: &PreparedPayout) -> impl Future<Output = Result<()>> + Send;
     fn acknowledge(&self, ack: &PayoutAcknowledgment) -> impl Future<Output = Result<()>> + Send;
+    /// Optional admission guard after OAuth and immediately before the single send.
+    fn before_send(&self) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Disposition {
@@ -401,29 +405,35 @@ impl<T: HttpTransport> PayoutClient<T> {
                 Disposition::NotDispatched,
             )
         })?;
-        let (value, outcome) =
-            authorized_send(&self.app, &self.transport, &self.base, command.path(), body)
-                .await
-                .map_err(|e| {
-                    let code = e.outcome.provider_code.as_ref();
-                    let disposition = if code.is_some_and(|c| c.as_str() == "500.002.1001") {
-                        Disposition::Duplicate
-                    } else if e
-                        .outcome
-                        .http_status
-                        .is_some_and(|s| (200..500).contains(&s))
-                        && code.is_some_and(|c| {
-                            self.proven_rejection_codes
-                                .get(&command)
-                                .is_some_and(|codes| codes.contains(c))
-                        })
-                    {
-                        Disposition::ProvenRejection
-                    } else {
-                        Disposition::Uncertain
-                    };
-                    failure(e, disposition)
-                })?;
+        let (value, outcome) = crate::transport::authorized_send_checked(
+            &self.app,
+            &self.transport,
+            &self.base,
+            command.path(),
+            prepared.wire_body.clone(),
+            persistence.before_send(),
+        )
+        .await
+        .map_err(|e| {
+            let code = e.outcome.provider_code.as_ref();
+            let disposition = if code.is_some_and(|c| c.as_str() == "500.002.1001") {
+                Disposition::Duplicate
+            } else if e
+                .outcome
+                .http_status
+                .is_some_and(|s| (200..500).contains(&s))
+                && code.is_some_and(|c| {
+                    self.proven_rejection_codes
+                        .get(&command)
+                        .is_some_and(|codes| codes.contains(c))
+                })
+            {
+                Disposition::ProvenRejection
+            } else {
+                Disposition::Uncertain
+            };
+            failure(e, disposition)
+        })?;
         let provider =
             acknowledgment(value, outcome).map_err(|e| failure(e, Disposition::Uncertain))?;
         let ack = PayoutAcknowledgment {

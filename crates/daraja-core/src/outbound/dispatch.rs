@@ -12,6 +12,7 @@ use crate::{
     Error, Timestamp,
     crypto::{Clock, Secret},
     identity::{Id, RequestKey, RequestPayload},
+    liquidity::{SweepClaim, SweepConfig},
     payout::{
         Destination, PayoutAcknowledgment, PayoutClient, PayoutPersistence, PayoutRequest,
         PreparedPayout,
@@ -118,7 +119,8 @@ impl<T: HttpTransport, C: Clock + Send + Sync> OutboundPayments<T, C> {
         let hooks = Hooks {
             repository: &self.repository,
             key: &request.key,
-            quote: &quote,
+            quote: Some(&quote),
+            sweep: None,
             payload: &payload,
             operation_id: &operation_id,
             clock: &self.clock,
@@ -139,6 +141,78 @@ impl<T: HttpTransport, C: Clock + Send + Sync> OutboundPayments<T, C> {
                 &hooks,
             )
             .await;
+        self.complete(&hooks, result).await
+    }
+
+    /// None keeps sweeps disabled and refreshes actionable operator alerts.
+    /// Use a separately configured source-account client with explicitly verified links.
+    pub async fn sweep_if_needed(
+        &self,
+        config: Option<&SweepConfig>,
+    ) -> Result<Option<Payout>, DispatchError> {
+        let now = now(&self.clock)?;
+        self.repository.refresh_liquidity_alerts(now).await?;
+        let Some(config) = config else {
+            return Ok(None);
+        };
+        let Some(snapshot) = self.repository.sweep_candidate(now).await? else {
+            return Ok(None);
+        };
+        let key = RequestKey {
+            caller: Id::new("liquidity")?,
+            operation: Id::new("sweep")?,
+            key: snapshot.clone(),
+        };
+        let destination = Id::new(format!("PAYBILL:{}:FLOAT", config.utility.as_str()))?;
+        let payload = RequestPayload {
+            operation: key.operation.clone(),
+            quote_id: snapshot.clone(),
+            destination: destination.clone(),
+            amount: config.amount,
+            tariff_version: config.tariff.version.clone(),
+            options: BTreeMap::new(),
+        };
+        if let Some(p) = self.repository.payout_replay(&key, &payload).await? {
+            return Ok(Some(p));
+        }
+        let operation_id = operation_id(&key)?;
+        let hooks = Hooks {
+            repository: &self.repository,
+            key: &key,
+            quote: None,
+            sweep: Some(SweepClaim {
+                config,
+                snapshot: &snapshot,
+            }),
+            payload: &payload,
+            operation_id: &operation_id,
+            clock: &self.clock,
+            config: &self.config,
+            claimed: AtomicBool::new(false),
+            error: Mutex::new(None),
+        };
+        let result = self
+            .client
+            .sweep(
+                &PayoutRequest {
+                    caller_originator_conversation_id: operation_id.clone(),
+                    destination: Destination::parse(destination.as_str())
+                        .map_err(DispatchError::Transport)?,
+                    amount: config.amount,
+                    result_url: self.config.b2b_result_url.clone(),
+                    timeout_url: self.config.b2b_timeout_url.clone(),
+                },
+                &hooks,
+            )
+            .await;
+        Ok(Some(self.complete(&hooks, result).await?))
+    }
+
+    async fn complete(
+        &self,
+        hooks: &Hooks<'_, C>,
+        result: Result<PayoutAcknowledgment, crate::payout::PayoutError>,
+    ) -> Result<Payout, DispatchError> {
         if let Some(error) = hooks.error.lock().expect("dispatch hook error").take() {
             return Err(error.into());
         }
@@ -147,7 +221,7 @@ impl<T: HttpTransport, C: Clock + Send + Sync> OutboundPayments<T, C> {
                 // Proven transport rejection remains an observation until the final evidence boundary.
                 self.repository
                     .record_dispatch_outcome(
-                        &operation_id,
+                        hooks.operation_id,
                         None,
                         &format!("{:?}", error.disposition),
                         &error.source.outcome,
@@ -157,12 +231,12 @@ impl<T: HttpTransport, C: Clock + Send + Sync> OutboundPayments<T, C> {
             } else {
                 return self
                     .repository
-                    .payout_replay(&request.key, &payload)
+                    .payout_replay(hooks.key, hooks.payload)
                     .await?
                     .ok_or(DispatchError::Transport(error.source));
             }
         }
-        Ok(self.repository.payout(&operation_id).await?.0)
+        Ok(self.repository.payout(hooks.operation_id).await?.0)
     }
 }
 
@@ -194,7 +268,8 @@ fn operation_id(key: &RequestKey) -> Result<Id, Error> {
 struct Hooks<'a, C> {
     repository: &'a Repository,
     key: &'a RequestKey,
-    quote: &'a PaymentQuote,
+    quote: Option<&'a PaymentQuote>,
+    sweep: Option<SweepClaim<'a>>,
     payload: &'a RequestPayload,
     operation_id: &'a Id,
     clock: &'a C,
@@ -214,16 +289,21 @@ impl<C: Clock + Send + Sync> PayoutPersistence for Hooks<'_, C> {
     async fn prepare(&self, prepared: &PreparedPayout) -> Result<(), ClientError> {
         let build = || -> Result<Payout, RepositoryError> {
             let now = now(self.clock)?;
-            let dispatch = DispatchRecord::new(
+            let tariff = self
+                .quote
+                .map(|q| q.tariff())
+                .or_else(|| self.sweep.map(|s| &s.config.tariff))
+                .ok_or(Error::EvidenceMismatch)?;
+            let mut dispatch = DispatchRecord::new(
                 self.operation_id.clone(),
                 self.payload.clone(),
                 prepared.wire_body.expose().as_bytes().to_vec(),
-                self.quote.tariff().clone(),
-                self.quote
-                    .principal()
-                    .checked_add(self.quote.tariff().fee)?,
-            )?
-            .with_quote(self.quote.clone(), now)?;
+                tariff.clone(),
+                self.payload.amount.checked_add(tariff.fee)?,
+            )?;
+            if let Some(quote) = self.quote {
+                dispatch = dispatch.with_quote(quote.clone(), now)?;
+            }
             Ok(Payout::dispatching(
                 dispatch,
                 self.operation_id.clone(),
@@ -243,7 +323,12 @@ impl<C: Clock + Send + Sync> PayoutPersistence for Hooks<'_, C> {
         let payout = self.capture(build())?;
         let (_, claimed) = self.capture(
             self.repository
-                .prepare_payout_claim(self.key, &payout, Some(prepared.endpoint.as_str()))
+                .prepare_payout_claim(
+                    self.key,
+                    &payout,
+                    Some(prepared.endpoint.as_str()),
+                    self.sweep,
+                )
                 .await,
         )?;
         self.claimed.store(claimed, Ordering::SeqCst);
@@ -251,6 +336,14 @@ impl<C: Clock + Send + Sync> PayoutPersistence for Hooks<'_, C> {
             return Err(ClientError::new(ErrorKind::Persistence));
         }
         Ok(())
+    }
+    async fn before_send(&self) -> Result<(), ClientError> {
+        let now = self.capture(now(self.clock).map_err(RepositoryError::from))?;
+        self.capture(
+            self.repository
+                .recheck_dispatch_float(self.operation_id, now)
+                .await,
+        )
     }
     async fn acknowledge(&self, ack: &PayoutAcknowledgment) -> Result<(), ClientError> {
         let now = self.capture(now(self.clock).map_err(RepositoryError::from))?;

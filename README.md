@@ -11,7 +11,7 @@ The repository contains one Cargo workspace:
   and a processor library/binary under development.
 - [daraja-daemon](crates/daraja-daemon): planned REST/gRPC sidecar.
 
-**Work in progress.** Stages 00–13 are locally verified. Inbound and outbound reconciliation are available as libraries;
+**Work in progress.** Stages 00–14 are locally verified. Inbound and outbound reconciliation are available as libraries;
 runnable services remain unimplemented; callback ingress is available as a
 library router, and durable dual-rail checkout is available as a library service.
 Both binaries exit unsuccessfully with an explicit diagnostic. No live provider
@@ -30,6 +30,7 @@ to disabled. See the [roadmap](docs/roadmap.md) for the remaining work.
 - [Tariff schedules and frozen KES/sat valuation](docs/tariffs-fx.md)
 - [Durable outbound dispatch](docs/outbound-dispatch.md)
 - [Outbound reconciliation and manual escalation](docs/outbound-reconcile.md)
+- [Liquidity telemetry, reservations and optional sweeps](docs/liquidity.md)
 - [Payout and balance transport](docs/payout-transport.md)
 - [Callback ingress and C2B validation](docs/webhook-ingress.md)
 - [Pinned protocol and provider findings](docs/protocol-contract.md)

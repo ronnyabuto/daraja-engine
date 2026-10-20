@@ -18,6 +18,7 @@
     {"id":"WIRE-PAYBILL", "capability":"b2b_pay_bill", "enabled":false, "classification":"UNVERIFIED"},
     {"id":"WIRE-B2B-ID", "capability":"b2b_caller_id", "enabled":false, "classification":"UNVERIFIED"},
     {"id":"B2C-01", "capability":"b2c_phone_01", "enabled":false, "classification":"UNVERIFIED"},
+    {"id":"BALANCE-SOURCE", "capability":"verified_balance_source", "enabled":false, "classification":"UNRESOLVED_TRUST"},
     {"id":"BALANCE-TILL", "capability":"balance_till", "enabled":false, "classification":"UNVERIFIED"},
     {"id":"WIRE-MMF", "capability":"mmf_transfer_command", "enabled":false, "classification":"UNVERIFIED"}
   ]

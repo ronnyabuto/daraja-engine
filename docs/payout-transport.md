@@ -42,7 +42,8 @@ construct a new client for a different environment. See the independent
 Command support/caller-ID acceptance never enables duplicate probing. Sweep also
 requires explicitly linked **distinct** accounts whose source equals PartyA and
 utility equals the requested destination. Configuration parsing, authorization,
-liquidity admission and automated sweep scheduling remain later stages.
+liquidity admission and optional bounded sweep orchestration are supplied by
+[liquidity](liquidity.md); daemon scheduling remains a later stage.
 
 ## Validation and credentials
 
@@ -138,3 +139,9 @@ Stage 13 adds the internal frozen-byte probe boundary and concrete status-query
 persistence under [outbound reconciliation](outbound-reconcile.md). Only the leased,
 evidence-approved worker authorizes a probe; ordinary MakePayment replay still
 never authorizes another send.
+
+Stage 14 supplies concrete balance query persistence and conservative snapshot
+processing under [liquidity](liquidity.md). `PayoutPersistence::before_send` allows
+the durable outbound hooks to recheck float after OAuth; transport-only hooks
+retain their existing behavior. New payout admission always includes liquidity
+checks in the repository, and a failed guard never releases a possibly sent payout.
