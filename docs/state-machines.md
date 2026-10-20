@@ -55,11 +55,11 @@ acquisition and operator authorization are later stages, not supplied by enums.
   rejects fractional KES instead of rounding. No floating point is used.
 - Quote terms freeze expected KES, credited amount, tariff version/fee, quote
   expiry, optional rational FX snapshot/source/expiry and settlement hold deadline.
-  Net credit is exactly expected minus fee, or floor(net × FX numerator /
-  denominator) sat. Products use `u128`, results must fit `u64`, zero quotes and
-  zero credit are rejected. Rounding dust remains unissued; fees cannot be added
-  to credit. Tariff evaluation, FX acquisition and liquidity admission are stage
-  11/14 responsibilities, not implemented configuration defaults.
+  KES credit is exactly expected minus fee. Sat credit is at most floor(net × FX
+  numerator / denominator), allowing requested sat amounts with collection dust.
+  Products use `u128`, results must fit `u64`, zero quotes and zero credit are rejected. Rounding dust remains unissued; fees cannot be added
+  to credit. Stage 11 supplies [validated tariffs and frozen FX](tariffs-fx.md);
+  liquidity admission remains stage 14. No production tariff/rate defaults exist.
 - Quote expiry concerns **receipt time**: receipt time at/after expiry is held.
   An independently verified on-time KES receipt may settle after quote expiry.
   There is no automatic grace for late deposits. FX validity is stricter:
@@ -221,3 +221,12 @@ Persisted timed risk holds and manual velocity/reversal blocks apply through all
 repository settlement paths. Operator block release does not bypass amount, FX,
 verification or timed hold checks. Refund requests remain `EXECUTION_GATED`;
 operator authentication/workflows and outbound execution remain later stages.
+
+## Stage 11 valuation
+
+Outgoing `PaymentQuote` freezes destination, principal, tariff effective dates,
+version/fee, rational FX, wallet reserve and expiration. Repository snapshots and
+fee audit decisions are immutable; new quoted dispatches validate expiry before
+admission. Existing pending dispatches retain their terms after expiry.
+Actual-fee evidence cannot refresh rates; excess fees remain audit exceptions.
+See [tariffs and FX](tariffs-fx.md) for exact rounding and CDK unit mapping.

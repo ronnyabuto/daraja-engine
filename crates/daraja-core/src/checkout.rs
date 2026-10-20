@@ -28,6 +28,7 @@ pub enum CheckoutError {
     Cooldown { retry_after: Timestamp },
     ReconciliationRequired,
     IdentityExhausted,
+    Fx(crate::fx::FxError),
 }
 impl From<Error> for CheckoutError {
     fn from(e: Error) -> Self {
@@ -46,16 +47,6 @@ impl std::fmt::Display for CheckoutError {
 }
 impl std::error::Error for CheckoutError {}
 pub type Result<T> = std::result::Result<T, CheckoutError>;
-
-pub trait FxCapability {
-    fn quote_sat(&self, amount: Amount, now: Timestamp) -> Result<QuoteTerms>;
-}
-pub struct UnsupportedFx;
-impl FxCapability for UnsupportedFx {
-    fn quote_sat(&self, _: Amount, _: Timestamp) -> Result<QuoteTerms> {
-        Err(CheckoutError::UnsupportedUnit)
-    }
-}
 
 /// Provider query failure semantics must be verified for the deployed endpoint/environment.
 #[derive(Clone, Debug, Default)]
@@ -78,7 +69,7 @@ impl StkReconciliationPolicy {
 pub struct CheckoutConfig {
     pub shortcode: Id,
     pub ttl_seconds: u32,
-    /// Explicit operator terms; tariff evaluation is stage 11.
+    /// Explicit collection fee, separate from disbursement tariff schedules.
     pub tariff: TariffSnapshot,
     pub settlement_hold_seconds: u32,
     pub callback_url: Secret,
@@ -246,6 +237,8 @@ pub struct CheckoutService<P, C, I = RandomIdentity> {
     clock: Arc<C>,
     identities: I,
     config: CheckoutConfig,
+    sat_capability: bool,
+    kes_capability: bool,
 }
 impl<P, C, I> CheckoutService<P, C, I>
 where
@@ -277,6 +270,8 @@ where
             clock,
             identities,
             config,
+            sat_capability: false,
+            kes_capability: false,
         })
     }
     fn now(&self) -> Result<Timestamp> {
@@ -287,16 +282,45 @@ where
     pub async fn checkout(&self, quote: &Id) -> Result<Checkout> {
         Checkout::from_quote(&self.repository.quote(quote).await?.0)
     }
+    /// Enable only after the deployed mint's CDK-SAT capability is independently verified.
+    pub fn with_verified_sat_capability(mut self, enabled: bool) -> Self {
+        self.sat_capability = enabled;
+        self
+    }
+    /// CDK settings must not infer custom KES support from local amount arithmetic.
+    pub fn with_verified_kes_capability(mut self, enabled: bool) -> Self {
+        self.kes_capability = enabled;
+        self
+    }
+    pub async fn enabled_units(&self, oracle: &impl crate::fx::FxOracle) -> Vec<Unit> {
+        let mut units = Vec::new();
+        if self.kes_capability {
+            units.push(Unit::KesMinor);
+        }
+        if self.sat_capability
+            && let Ok(now) = self.now()
+            && let Ok(fx) = oracle.quote(now).await
+            && let Ok(fresh_now) = self.now()
+            && valid_fx(&fx, fresh_now).is_ok()
+        {
+            units.push(Unit::Sat);
+        }
+        units
+    }
     pub async fn create(&self, request: CreateCheckout) -> Result<Checkout> {
+        self.create_with_oracle(request, &crate::fx::OfflineOracle { snapshot: None })
+            .await
+    }
+    pub async fn create_with_oracle(
+        &self,
+        request: CreateCheckout,
+        oracle: &impl crate::fx::FxOracle,
+    ) -> Result<Checkout> {
         if request.key.operation.as_str() != "inbound-create" {
             return Err(Error::EvidenceMismatch.into());
         }
         let now = self.now()?;
-        if request.amount.unit() == Unit::Sat {
-            UnsupportedFx.quote_sat(request.amount, now)?;
-        }
-        let whole = request.amount.whole_kes()?;
-        if whole == 0 {
+        if request.amount.value() == 0 {
             return Err(Error::InvalidAmount.into());
         }
         validate_phone(request.phone.as_ref())?;
@@ -313,14 +337,42 @@ where
         {
             return self.checkout(&id).await;
         }
+        let (expected, credit, fx) = match request.amount.unit() {
+            Unit::KesMinor => {
+                request.amount.whole_kes()?;
+                (
+                    request.amount,
+                    request.amount.checked_sub(self.config.tariff.fee)?,
+                    None,
+                )
+            }
+            Unit::Sat => {
+                if !self.sat_capability {
+                    return Err(CheckoutError::UnsupportedUnit);
+                }
+                let fx = oracle.quote(now).await.map_err(CheckoutError::Fx)?;
+                // Re-read time after I/O; a slow oracle cannot extend its own validity.
+                valid_fx(&fx, self.now()?)?;
+                let expected = fx
+                    .backing_minor(request.amount)?
+                    .checked_add(self.config.tariff.fee)?
+                    .ceil_whole_kes()?;
+                expected.whole_kes()?;
+                (expected, request.amount, Some(fx))
+            }
+        };
+        let expires = add(now, self.config.ttl_seconds)?;
         let terms = QuoteTerms {
-            expected: request.amount,
-            credit: request.amount.checked_sub(self.config.tariff.fee)?,
-            quote_expires_at: add(now, self.config.ttl_seconds)?,
-            fx: None,
+            expected,
+            credit,
+            quote_expires_at: fx.as_ref().map_or(expires, |f| expires.min(f.expires_at)),
+            fx,
             tariff: self.config.tariff.clone(),
             hold_until: add(now, self.config.settlement_hold_seconds)?,
         };
+        if self.now()? >= terms.quote_expires_at {
+            return Err(Error::QuoteExpired.into());
+        }
         for _ in 0..32 {
             let q = InboundQuote::new(
                 self.identities.id()?,
@@ -448,22 +500,14 @@ where
                 "phone".into(),
                 phone.map(|p| p.expose().to_owned()).unwrap_or_default(),
             ),
-            ("ttl".into(), self.config.ttl_seconds.to_string()),
-            (
-                "hold".into(),
-                self.config.settlement_hold_seconds.to_string(),
-            ),
-            (
-                "fee_minor".into(),
-                self.config.tariff.fee.value().to_string(),
-            ),
+            ("request_contract".into(), "inbound-v2".into()),
         ]);
         Ok(RequestPayload {
             operation: key.operation.clone(),
             quote_id: quote,
             destination: self.config.shortcode.clone(),
             amount,
-            tariff_version: self.config.tariff.version.clone(),
+            tariff_version: Id::new("inbound-request-v2")?,
             options,
         })
     }
@@ -480,6 +524,17 @@ where
             transaction_type: StkTransactionType::CustomerPayBillOnline,
         };
         tokio::spawn(async move {
+            let Ok(seconds) = u64::try_from(clock.now().timestamp()) else {
+                return;
+            };
+            if Timestamp(seconds) >= q.terms().quote_expires_at
+                || q.terms()
+                    .fx
+                    .as_ref()
+                    .is_some_and(|f| Timestamp(seconds) >= f.expires_at)
+            {
+                return;
+            }
             let change = match collection.submit(request).await {
                 Ok(ack) => StkChange::RecordAcknowledgment {
                     attempt: a.id().clone(),
@@ -532,6 +587,14 @@ fn validate_phone(phone: Option<&Secret>) -> Result<()> {
             || !p.expose().bytes().all(|b| b.is_ascii_digit()))
     {
         return Err(Error::InvalidIdentity.into());
+    }
+    Ok(())
+}
+
+fn valid_fx(fx: &crate::amount::FxSnapshot, now: Timestamp) -> Result<()> {
+    fx.validate_at(now)?;
+    if fx.expires_at.0 > now.0.checked_add(300).ok_or(Error::Overflow)? {
+        return Err(CheckoutError::InvalidConfiguration);
     }
     Ok(())
 }

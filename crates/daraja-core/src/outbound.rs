@@ -43,6 +43,7 @@ pub struct DispatchRecord {
     wire_body: Vec<u8>,
     tariff: TariffSnapshot,
     reserved: Amount,
+    quote: Option<crate::valuation::PaymentQuote>,
 }
 
 impl std::fmt::Debug for DispatchRecord {
@@ -76,7 +77,29 @@ impl DispatchRecord {
             wire_body,
             tariff,
             reserved,
+            quote: None,
         })
+    }
+
+    pub fn with_quote(
+        mut self,
+        quote: crate::valuation::PaymentQuote,
+        now: Timestamp,
+    ) -> Result<Self, Error> {
+        quote.validate_dispatch(now)?;
+        if self.payload.quote_id != *quote.id()
+            || self.payload.destination != *quote.destination()
+            || self.payload.amount != quote.principal()
+            || self.tariff != *quote.tariff()
+            || self.reserved != quote.principal().checked_add(quote.tariff().fee)?
+        {
+            return Err(Error::EvidenceMismatch);
+        }
+        self.quote = Some(quote);
+        Ok(self)
+    }
+    pub fn quote(&self) -> Option<&crate::valuation::PaymentQuote> {
+        self.quote.as_ref()
     }
 
     pub fn operation_id(&self) -> &Id {
@@ -150,6 +173,9 @@ impl Payout {
         next_check_at: Timestamp,
         manual_after: Timestamp,
     ) -> Result<Self, Error> {
+        if let Some(quote) = dispatch.quote() {
+            quote.validate_dispatch(started_at)?;
+        }
         if next_check_at < started_at || manual_after < next_check_at {
             return Err(Error::InvalidTransition);
         }
@@ -301,6 +327,8 @@ struct StoredDispatchRecord {
     tariff: TariffSnapshot,
     #[serde(deserialize_with = "crate::storage::deserialize")]
     reserved: Amount,
+    #[serde(default, deserialize_with = "crate::storage::deserialize")]
+    quote: Option<crate::valuation::PaymentQuote>,
 }
 impl crate::storage::Stored for DispatchRecord {
     fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {

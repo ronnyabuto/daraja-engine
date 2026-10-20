@@ -16,6 +16,37 @@ pub struct Amount {
 }
 
 impl Amount {
+    /// Nonnegative fixed KES decimal, at most two places, no sign or exponent.
+    pub fn kes_decimal(s: &str) -> Result<Self, Error> {
+        let mut parts = s.split('.');
+        let whole = parts.next().ok_or(Error::InvalidAmount)?;
+        let fraction = parts.next();
+        let frac = fraction.unwrap_or("");
+        if whole.is_empty()
+            || !whole.bytes().all(|b| b.is_ascii_digit())
+            || parts.next().is_some()
+            || (fraction.is_some() && frac.is_empty())
+            || frac.len() > 2
+            || !frac.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Err(Error::InvalidAmount);
+        }
+        let major = whole.parse::<u64>().map_err(|_| Error::Overflow)?;
+        let minor = if frac.is_empty() {
+            0
+        } else {
+            frac.parse::<u64>().map_err(|_| Error::InvalidAmount)?
+                * if frac.len() == 1 { 10 } else { 1 }
+        };
+        Ok(Self::new(
+            major
+                .checked_mul(100)
+                .and_then(|n| n.checked_add(minor))
+                .ok_or(Error::Overflow)?,
+            Unit::KesMinor,
+        ))
+    }
+
     pub const fn new(value: u64, unit: Unit) -> Self {
         Self { value, unit }
     }
@@ -60,6 +91,14 @@ impl Amount {
         Ok(())
     }
 
+    pub fn ceil_whole_kes(self) -> Result<Self, Error> {
+        self.require_kes()?;
+        let whole = self.value / 100 + u64::from(!self.value.is_multiple_of(100));
+        Ok(Self::new(
+            whole.checked_mul(100).ok_or(Error::Overflow)?,
+            Unit::KesMinor,
+        ))
+    }
     pub fn whole_kes(self) -> Result<u64, Error> {
         self.require_kes()?;
         if !self.value.is_multiple_of(100) {
@@ -79,6 +118,52 @@ pub struct FxSnapshot {
 }
 
 impl FxSnapshot {
+    pub fn validate_at(&self, now: Timestamp) -> Result<(), Error> {
+        if self.numerator == 0 || self.denominator == 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if now >= self.expires_at {
+            return Err(Error::FxExpired);
+        }
+        Ok(())
+    }
+    /// Debit KES value in sat, rounding up to avoid spending unbacked float.
+    pub fn debit(&self, kes: Amount) -> Result<Amount, Error> {
+        kes.require_kes()?;
+        Ok(Amount::new(
+            ratio(kes.value(), self.numerator, self.denominator, true)?,
+            Unit::Sat,
+        ))
+    }
+    /// Backing available from sat, rounded down to KES minor units for fee budgeting.
+    pub fn value_kes(&self, sat: Amount) -> Result<Amount, Error> {
+        if sat.unit() != Unit::Sat {
+            return Err(Error::CurrencyMismatch);
+        }
+        Ok(Amount::new(
+            ratio(sat.value(), self.denominator, self.numerator, false)?,
+            Unit::KesMinor,
+        ))
+    }
+    /// Payout from sat, rounding down to whole KES. Dust remains reserved.
+    pub fn payout_kes(&self, sat: Amount) -> Result<Amount, Error> {
+        let minor = self.value_kes(sat)?.value();
+        Ok(Amount::new(minor / 100 * 100, Unit::KesMinor))
+    }
+    /// Collection backing for sat, rounded up to whole KES.
+    pub fn backing_kes(&self, sat: Amount) -> Result<Amount, Error> {
+        self.backing_minor(sat)?.ceil_whole_kes()
+    }
+
+    pub fn backing_minor(&self, sat: Amount) -> Result<Amount, Error> {
+        if sat.unit() != Unit::Sat {
+            return Err(Error::CurrencyMismatch);
+        }
+        Ok(Amount::new(
+            ratio(sat.value(), self.denominator, self.numerator, true)?,
+            Unit::KesMinor,
+        ))
+    }
     pub fn credit(&self, kes: Amount) -> Result<Amount, Error> {
         kes.require_kes()?;
         if self.numerator == 0 || self.denominator == 0 {
@@ -154,4 +239,13 @@ impl crate::storage::Stored for TariffSnapshot {
     fn read<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         StoredTariffSnapshot::deserialize(d)
     }
+}
+
+fn ratio(value: u64, numerator: u64, denominator: u64, ceil: bool) -> Result<u64, Error> {
+    if numerator == 0 || denominator == 0 {
+        return Err(Error::InvalidAmount);
+    }
+    let product = u128::from(value) * u128::from(numerator);
+    let d = u128::from(denominator);
+    u64::try_from(product / d + u128::from(ceil && product % d != 0)).map_err(|_| Error::Overflow)
 }

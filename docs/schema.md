@@ -1,7 +1,7 @@
 # SQLite repository
 
 Owner: `daraja-core::repository::Repository`; domain rules remain in `inbound`,
-`outbound`, `amount` and `identity`. Four ordered, embedded SQLx migrations live in
+`outbound`, `amount` and `identity`. Six ordered, embedded SQLx migrations live in
 `crates/daraja-core/migrations`. SQLx records/checks their versions and checksums;
 `build.rs` watches the directory. Never edit an applied migration: add a new one.
 Opening a database applies missing migrations and rejects checksum mismatch.
@@ -139,3 +139,18 @@ reviewed ownership/destination evidence and frozen gross/fee/net values.
 [Deposit exception contracts](deposit-exceptions.md) define grace, risk identity,
 operator trust boundaries and the execution gate. Existing snapshots without a
 payer remain readable with `payer: None`; no earlier migration is rewritten.
+
+## Stage 11 valuation persistence
+
+Migration 0006 adds immutable `payment_quotes` snapshots and `payout_fee_audit`.
+Quote snapshots contain normalized destination, principal, tariff effective dates,
+version/fee, FX rational/source/expiry, wallet principal/reserve and expiry.
+Quoted dispatch records retain the same snapshot; admission compares it against
+the durable quote and checks its frozen accounting/expiry. Old dispatch records
+with no quote field remain readable. They are not the stage 12 outgoing quote path.
+
+Fee audit rows reference verified PAID payouts and retain nullable independently
+established actual fee plus conservative internal total spent. A NULL actual fee
+means consume the full reserve. An excess fee is retained with NULL total spent
+and raises SettlementHeld. Replays cannot change the audit decision. Update/delete
+triggers protect both new tables. No existing migration was edited.

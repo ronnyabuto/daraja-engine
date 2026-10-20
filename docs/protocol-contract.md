@@ -259,4 +259,7 @@ server-enforced 35-second retry eligibility without changing pinned CDK or provi
 wire contracts. Current STK query/simulation pages exposed no usable terminal
 failure-code contract on review; STK-RESEND remains disabled and its failure-code
 policy defaults empty. Explicit synthetic test policy proves service behavior only.
-Sat remains unsupported until stage 11 supplies FX; no live rates are fabricated.
+Stage 11 supplies the [tariff/FX library](tariffs-fx.md), including conservative
+whole-KES/sat `total_spent` mapping. CDK unit advertisement requires explicit
+deployed-mint verification and a valid oracle for sat; defaults advertise no units.
+No live rate or deployed CDK support is fabricated.

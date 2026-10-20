@@ -1,6 +1,6 @@
 # Implementation roadmap
 
-Stages 00–10 are implemented and locally verified. This is a development
+Stages 00–11 are implemented and locally verified. This is a development
 workspace, not a runnable payment service or a production-ready mint integration.
 
 | Stages | Scope | State |
@@ -14,19 +14,21 @@ workspace, not a runnable payment service or a production-ready mint integration
 | 08 | Durable idempotent inbound quotes, immediate dual-rail fallback and reconciled resend cooldown | Locally verified |
 | 09 | Leased inbound reconciliation, evidence gating and durable settlement notification replay | Locally verified; live SETTLE blocked |
 | 10 | Verified deposit exceptions, KES grace, risk holds and durable refund reservations | Locally verified; refund execution gated |
-| 11–15 | Tariffs/FX, durable payout dispatch/reconciliation, liquidity and operator recovery | Planned |
+| 11 | Separate tariff schedules, immutable outgoing valuation, exact KES/sat conversions and pluggable FX | Locally verified; live/CDK unit gates disabled |
+| 12–15 | Durable payout dispatch/reconciliation, liquidity and operator recovery | Planned |
 | 16 | Optional PostgreSQL parity | Planned |
 | 17–19 | CDK service implementation and real mint/proof-lock integration | Planned |
 | 20–24 | Daemon REST/gRPC, reference clients and consumer examples | Planned |
 | 25–28 | Fault/security closure, packaging, live verification and final requirement audit | Planned |
 
-The current workspace test suite has 121 top-level test entries, including SQLite
+The current workspace test suite has 130 top-level test entries, including SQLite
 child-process helpers. Tests cover domain invariants, file-backed SQLite
 transactions and crash recovery, OAuth coordination, synthetic cryptography,
 collection/query/payout/balance HTTP contracts, callback admission/durability/C2B validation,
 durable checkout creation/resend and dual-rail fallback, inbound worker races,
 independent evidence checks, durable notification replay, exception/refund races,
-KES grace, risk holds/reversal alerts, deadline phases, throttling
+KES grace, risk holds/reversal alerts, tariff/FX boundaries, conversion/fee backing,
+frozen quote/fee audit recovery, deadline phases, throttling
 and TRACE redaction.
 See [build and verification commands](../README.md#build-locally) to reproduce them.
 

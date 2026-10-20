@@ -10,9 +10,12 @@ access policy before invoking it.
 `Amount(KesMinor)`, and an optional normalized `254…` phone. Configuration supplies
 the collection shortcode, positive TTL, explicit operator tariff snapshot,
 settlement hold duration and secret callback URL. Expected M-Pesa amount and credit
-are distinct: KES credit equals gross amount minus the explicit fee. Stage 11 adds
-schedule evaluation. `FxCapability` is the FX boundary; this stage wires only
-`UnsupportedFx`, so sat requests fail without creating quotes or inventing rates.
+are distinct: KES credit equals gross amount minus the explicit collection fee.
+Stage 11 adds `create_with_oracle` for requested sat credit backed by whole-KES
+collections, strict frozen FX expiry and explicit deployed mint capability
+attestations. Missing oracle or capability rejects new sat requests. See
+[tariff and FX contracts](tariffs-fx.md) for rounding, enabled-unit advertisement,
+provider freshness limits and fee accounting.
 
 The creation transaction commits the quote, request hash/binding, optional first
 STK attempt and its poll job together. Account references contain eight uppercase
@@ -20,9 +23,10 @@ ASCII letters/digits, sampled without modulo bias from OS entropy. A unique inde
 and serialized writer transaction enforce collision safety across processes; a
 collision generates a new candidate, bounded at 32 attempts. Exhaustion, entropy
 and storage failures return errors. Request hashes include the operation,
-shortcode, amount/unit, phone, tariff version/fee, TTL and hold duration; generated
-identities and the clock time are excluded. Reusing a caller/operation/key with a
-different payload conflicts; matching concurrent requests return the original
+shortcode, requested amount/unit and phone under the `inbound-v2` request contract;
+generated identities, clock and pricing configuration are excluded. Legacy
+configuration-bearing hashes are recognized from frozen quote/audit records.
+Reusing a caller/operation/key with a different payload conflicts; matching concurrent requests return the original
 quote and never dispatch again. A replay returns its current checkout projection.
 
 The committed response contains quote ID, payment state, credit/unit, nullable

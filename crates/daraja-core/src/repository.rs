@@ -49,6 +49,7 @@ impl From<serde_json::Error> for RepositoryError {
     }
 }
 mod exceptions;
+mod valuation;
 pub use exceptions::{DepositPolicy, RefundAuthorization, RefundRequest};
 
 type Result<T> = std::result::Result<T, RepositoryError>;
@@ -648,13 +649,25 @@ impl Repository {
             return Ok(Id::new(row.try_get::<String,_>("operation_id")?)?);
         }
         // Revalidate deserialized values before admitting a new dispatch.
-        let validated = crate::outbound::DispatchRecord::new(
+        let mut validated = crate::outbound::DispatchRecord::new(
             d.operation_id().clone(),
             d.payload().clone(),
             d.wire_body().to_vec(),
             d.tariff().clone(),
             d.reserved(),
         )?;
+        if let Some(quote) = d.quote() {
+            let row = sqlx::query("SELECT data FROM payment_quotes WHERE id=?")
+                .bind(quote.id().as_str())
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or(Error::NotFound)?;
+            let stored: crate::valuation::PaymentQuote = decode(row.try_get("data")?)?;
+            if stored != *quote {
+                return Err(Error::EvidenceMismatch.into());
+            }
+            validated = validated.with_quote(stored, payout.started_at())?;
+        }
         let fresh = Payout::dispatching(
             validated,
             payout.correlation().caller_request.clone(),
@@ -942,14 +955,48 @@ async fn checkout_binding(
     payload: &RequestPayload,
 ) -> Result<Option<Id>> {
     let row = sqlx::query("SELECT payload_hash,operation_id FROM request_bindings WHERE caller=? AND operation=? AND request_key=?")
-        .bind(key.caller.as_str()).bind(key.operation.as_str()).bind(key.key.as_str()).fetch_optional(conn).await?;
-    row.map(|row| {
-        if row.try_get::<Vec<u8>, _>("payload_hash")? != payload.hash().as_bytes() {
-            return Err(Error::IdempotencyConflict.into());
+        .bind(key.caller.as_str()).bind(key.operation.as_str()).bind(key.key.as_str()).fetch_optional(&mut *conn).await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let operation_id = Id::new(row.try_get::<String, _>("operation_id")?)?;
+    let stored_hash = row.try_get::<Vec<u8>, _>("payload_hash")?;
+    if stored_hash == payload.hash().as_bytes() {
+        return Ok(Some(operation_id));
+    }
+    // Stage 08 bindings included operator configuration. Reconstruct those exact
+    // terms from the frozen quote, without repricing or replacing the binding.
+    if payload
+        .options
+        .get("request_contract")
+        .is_some_and(|v| v == "inbound-v2")
+    {
+        let row = sqlx::query("SELECT q.data, MIN(a.created_at) AS created_at FROM inbound_quotes q JOIN audit_records a ON a.subject=q.id AND a.action='CHECKOUT_PREPARED' WHERE q.id=? GROUP BY q.id")
+            .bind(operation_id.as_str()).fetch_optional(&mut *conn).await?;
+        if let Some(row) = row {
+            let q: InboundQuote = decode(row.try_get("data")?)?;
+            let created =
+                u64::try_from(row.try_get::<i64, _>("created_at")?).map_err(|_| Error::Overflow)?;
+            let terms = q.terms();
+            if let (Some(ttl), Some(hold)) = (
+                terms.quote_expires_at.0.checked_sub(created),
+                terms.hold_until.0.checked_sub(created),
+            ) {
+                let mut legacy = payload.clone();
+                legacy.tariff_version = terms.tariff.version.clone();
+                legacy.options.remove("request_contract");
+                legacy.options.insert("ttl".into(), ttl.to_string());
+                legacy.options.insert("hold".into(), hold.to_string());
+                legacy
+                    .options
+                    .insert("fee_minor".into(), terms.tariff.fee.value().to_string());
+                if stored_hash == legacy.hash().as_bytes() {
+                    return Ok(Some(operation_id));
+                }
+            }
         }
-        Ok(Id::new(row.try_get::<String, _>("operation_id")?)?)
-    })
-    .transpose()
+    }
+    Err(Error::IdempotencyConflict.into())
 }
 
 async fn persist_attempt(conn: &mut SqliteConnection, quote: &Id, a: &StkAttempt) -> Result<()> {

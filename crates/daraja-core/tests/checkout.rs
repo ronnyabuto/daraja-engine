@@ -885,3 +885,174 @@ async fn acknowledgment_after_manual_settlement_retains_ids_and_holds_late_stk_p
     );
     assert_eq!(f.repo.events_after(0, 10).await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn sat_checkout_freezes_backing_and_replays_after_reload_restart_and_oracle_loss() {
+    use daraja_core::{amount::FxSnapshot, fx::OfflineOracle};
+    let f = Fixture::new(Mode::Success).await;
+    let oracle = OfflineOracle {
+        snapshot: Some(FxSnapshot {
+            source: id("synthetic-fx"),
+            numerator: 7,
+            denominator: 13,
+            expires_at: Timestamp(180),
+        }),
+    };
+    assert_eq!(f.service().enabled_units(&oracle).await, Vec::<Unit>::new());
+    let mut config = f.config();
+    config.tariff.fee = kes(100);
+    let s = CheckoutService::new(
+        f.repo.clone(),
+        f.client.clone(),
+        Arc::new(f.clock.clone()),
+        f.identities.clone(),
+        config,
+    )
+    .unwrap()
+    .with_verified_sat_capability(true)
+    .with_verified_kes_capability(true);
+    assert_eq!(
+        s.enabled_units(&oracle).await,
+        vec![Unit::KesMinor, Unit::Sat]
+    );
+    let make = || {
+        let mut r = request("sat-frozen", false);
+        r.amount = Amount::new(101, Unit::Sat);
+        r
+    };
+    let c = s.create_with_oracle(make(), &oracle).await.unwrap();
+    assert_eq!(c.credit, Amount::new(101, Unit::Sat));
+    assert_eq!(c.fallback.amount, kes(300));
+    assert_eq!(c.expires_at, Timestamp(180));
+    let frozen = f.repo.quote(&c.quote_id).await.unwrap().0;
+    assert_eq!(frozen.terms().fx, oracle.snapshot);
+    assert_eq!(frozen.terms().tariff.fee, kes(100));
+    let repo = Repository::open(f.dir.path().join("checkout.sqlite"))
+        .await
+        .unwrap();
+    let mut reload = f.config();
+    reload.tariff.version = id("reloaded");
+    reload.tariff.fee = kes(900);
+    reload.ttl_seconds = 12;
+    let reloaded = CheckoutService::new(
+        repo,
+        f.client.clone(),
+        Arc::new(f.clock.clone()),
+        f.identities.clone(),
+        reload,
+    )
+    .unwrap();
+    f.at(190);
+    let unavailable = OfflineOracle { snapshot: None };
+    assert_eq!(
+        reloaded
+            .create_with_oracle(make(), &unavailable)
+            .await
+            .unwrap(),
+        c
+    );
+    assert_eq!(reloaded.enabled_units(&oracle).await, Vec::<Unit>::new());
+    assert!(
+        s.resend(
+            &c.quote_id,
+            key("inbound-resend", "expired-sat"),
+            Secret::new("254700000001")
+        )
+        .await
+        .is_err()
+    );
+    let mut fresh = make();
+    fresh.key = key("inbound-create", "new-sat");
+    assert!(s.create_with_oracle(fresh, &oracle).await.is_err());
+    assert_eq!(f.count(), 0);
+    let deposit = VerifiedDeposit::attest(DepositAttestation {
+        payer: None,
+        source: EvidenceSource::ReviewedStatement(id("synthetic")),
+        receipt: ReceiptId::new("SATEXPIRED1").unwrap(),
+        quote_id: Some(c.quote_id.clone()),
+        amount: c.fallback.amount,
+        shortcode: c.fallback.paybill.clone(),
+        rail: DepositRail::C2b {
+            account_ref: c.fallback.account_ref.clone(),
+        },
+        received_at: Timestamp(170),
+        verified_at: Timestamp(190),
+    })
+    .unwrap();
+    f.repo.confirm(deposit, None).await.unwrap();
+    let (_, version) = f.repo.quote(&c.quote_id).await.unwrap();
+    assert!(
+        f.repo
+            .settle(&c.quote_id, version, Timestamp(190))
+            .await
+            .is_err()
+    );
+    assert!(f.repo.events_after(0, 10).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn legacy_checkout_binding_replays_frozen_configuration_after_upgrade() {
+    use daraja_core::{identity::RequestPayload, inbound::QuoteTerms};
+    let f = Fixture::new(Mode::Success).await;
+    let q = daraja_core::inbound::InboundQuote::new(
+        id("legacy-quote"),
+        id("LEGACY01"),
+        id("174379"),
+        QuoteTerms {
+            expected: kes(10000),
+            credit: kes(10000),
+            quote_expires_at: Timestamp(400),
+            fx: None,
+            tariff: f.config().tariff,
+            hold_until: Timestamp(100),
+        },
+    )
+    .unwrap();
+    f.repo.insert_quote(&q, Timestamp(100)).await.unwrap();
+    let r = request("legacy", false);
+    let payload = RequestPayload {
+        operation: r.key.operation.clone(),
+        quote_id: id("new-inbound-quote"),
+        destination: id("174379"),
+        amount: r.amount,
+        tariff_version: id("operator-v1"),
+        options: std::collections::BTreeMap::from([
+            ("phone".into(), "".into()),
+            ("ttl".into(), "300".into()),
+            ("hold".into(), "0".into()),
+            ("fee_minor".into(), "0".into()),
+        ]),
+    };
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(f.dir.path().join("checkout.sqlite")),
+        )
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO request_bindings(caller,operation,request_key,payload_hash,operation_id) VALUES(?,?,?,?,?)").bind(r.key.caller.as_str()).bind(r.key.operation.as_str()).bind(r.key.key.as_str()).bind(payload.hash().as_bytes().as_slice()).bind(q.id().as_str()).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO audit_records(subject,action,created_at) VALUES(?,'CHECKOUT_PREPARED',100)",
+    )
+    .bind(q.id().as_str())
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut config = f.config();
+    config.tariff.version = id("changed");
+    config.tariff.fee = kes(900);
+    config.ttl_seconds = 10;
+    let s = CheckoutService::new(
+        f.repo.clone(),
+        f.client.clone(),
+        Arc::new(f.clock.clone()),
+        f.identities.clone(),
+        config,
+    )
+    .unwrap();
+    assert_eq!(s.create(r).await.unwrap().quote_id, *q.id());
+    let mut conflict = request("legacy", true);
+    conflict.amount = kes(11000);
+    assert!(s.create(conflict).await.is_err());
+    assert_eq!(f.count(), 0);
+}

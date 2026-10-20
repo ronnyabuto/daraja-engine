@@ -42,6 +42,9 @@ impl QuoteTerms {
             (Unit::Sat, Some(fx)) => fx.credit(net)?,
             _ => return Err(Error::CurrencyMismatch),
         };
+        if self.credit.unit() == Unit::Sat && self.credit.value() <= credit.value() {
+            return Ok(());
+        }
         if credit != self.credit {
             return Err(Error::AmountMismatch);
         }

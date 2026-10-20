@@ -5,6 +5,7 @@ pub mod auth;
 pub mod checkout;
 pub mod collection;
 pub mod crypto;
+pub mod fx;
 pub mod identity;
 pub mod inbound;
 pub mod outbound;
@@ -12,7 +13,9 @@ pub mod payout;
 pub mod reconcile;
 pub mod repository;
 mod storage;
+pub mod tariffs;
 pub mod transport;
+pub mod valuation;
 pub mod webhook;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
