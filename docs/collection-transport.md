@@ -133,3 +133,8 @@ whole-request `timeout`, `retry::never`, `redirect::Policy::none`, `no_proxy`,
 `connection_verbose(false)`, `Response::chunk` and `Error::{is_timeout,is_connect}`.
 The existing tokio-util dependency enables `io` solely for the streaming fixture;
 no new crate/version was introduced.
+
+Stage 09 adds the concrete inbound `ProviderQueries` adapter and repository status
+hooks. Its durable query identity, early callback correlation, conservative
+no-resubmission rule and independent evidence boundary are documented in
+[inbound reconciliation](inbound-reconcile.md).

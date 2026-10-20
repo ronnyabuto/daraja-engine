@@ -17,7 +17,11 @@ Implemented and locally tested:
 - Gated B2C/B2B payout and balance clients, immutable dispatch preparation and
   asynchronous observations: [payout transport](../../docs/payout-transport.md).
 
-Provider verification, callback ingress and reconciliation
-workers remain under development. Local tests do not establish live provider
+- Secure callback ingress and durable checkout: [ingress](../../docs/webhook-ingress.md)
+  and [checkout](../../docs/inbound-checkout.md).
+- Leased inbound reconciliation, transactional verified settlement and durable
+  notification replay: [reconciliation](../../docs/inbound-reconcile.md).
+
+Live independent provider verification and outbound reconciliation remain gated. Local tests do not establish live provider
 permissions or settlement evidence. See the [roadmap](../../docs/roadmap.md) and
 [verification gates](../../docs/verification-gates.md).

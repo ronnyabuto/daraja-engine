@@ -116,3 +116,9 @@ by the independent accounting verifier rather than minting twice.
 
 Reproduce the real TCP/file-backed admission, validation, rollback/reopen and
 server TRACE checks with `cargo test -p daraja-core --test webhook --locked`.
+
+Stage 09 also enqueues leased inbound reconciliation work in the same admission
+transaction. STK/C2B workers read the durable inbox, while TransactionStatus
+results remain observations correlated to prepared query rows. See
+[inbound reconciliation](inbound-reconcile.md); admission never supplies settlement
+authority.

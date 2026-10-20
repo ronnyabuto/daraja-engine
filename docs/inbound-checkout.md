@@ -90,3 +90,8 @@ cargo test -p daraja-core --test checkout --locked
 The tests prove local durability, ordering, fallback and accounting boundaries.
 They do not prove provider failure semantics, independent settlement evidence or
 live payment acceptance. All [external gates](verification-gates.md) remain off.
+
+Stage 09 consumes checkout's persisted STK jobs using the absolute 35/65/110-second
+schedule. See [inbound reconciliation](inbound-reconcile.md) for provider evidence
+limits and durable settlement notifications. Checkout resends retain their own
+explicit reconciliation policy.

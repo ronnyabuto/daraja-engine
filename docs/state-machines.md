@@ -198,3 +198,13 @@ metadata recording path can bind a late acknowledgment after PAID; it preserves
 financial state and terminal attempt results so additional payments can still be
 matched and held as excess. The original public acknowledgment transition still
 rejects PAID.
+
+## Stage 09 verification worker
+
+[Inbound reconciliation](inbound-reconcile.md) now schedules provider observations
+and applies these domain predicates under a fenced SQLite transaction. A separate
+trusted `DepositVerifier` must establish complete independent value evidence; the
+default `UnavailableVerifier` leaves it unresolved. Success codes alone never
+construct trusted value. Already verified settlement holds can release from
+durable evidence, while rechecking FX, amount and time. Quote settlement, event
+insertion and worker completion commit together; consumption replays by sequence.

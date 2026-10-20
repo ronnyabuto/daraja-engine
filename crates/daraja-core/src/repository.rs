@@ -111,6 +111,8 @@ pub struct JobClaim {
     pub subject: Id,
     pub generation: i64,
     pub lease_until: Timestamp,
+    pub poll_slot: i64,
+    pub retry_count: i64,
 }
 
 impl Repository {
@@ -206,6 +208,19 @@ impl Repository {
             .execute(&mut *tx).await?;
         sqlx::query("INSERT INTO callback_jobs(observation_id,due_at) VALUES(?,?) ON CONFLICT(observation_id) DO NOTHING")
             .bind(&id).bind(time(now)?).execute(&mut *tx).await?;
+        if matches!(
+            endpoint,
+            "/callbacks/stk/{secret}" | "/callbacks/c2b/confirmation/{secret}"
+        ) {
+            enqueue(
+                &mut tx,
+                &format!("callback:{id}"),
+                "INBOUND_CALLBACK",
+                &Id::new(id)?,
+                now,
+            )
+            .await?;
+        }
         tx.commit().await?;
         Ok(())
     }
@@ -468,7 +483,26 @@ impl Repository {
         deposit: VerifiedDeposit,
         settle_at: Option<Timestamp>,
     ) -> Result<DepositState> {
+        self.confirm_inner(deposit, settle_at, None).await
+    }
+    pub(crate) async fn apply_inbound_evidence(
+        &self,
+        claim: &JobClaim,
+        deposit: VerifiedDeposit,
+        now: Timestamp,
+    ) -> Result<DepositState> {
+        self.confirm_inner(deposit, Some(now), Some(claim)).await
+    }
+    async fn confirm_inner(
+        &self,
+        deposit: VerifiedDeposit,
+        settle_at: Option<Timestamp>,
+        worker: Option<&JobClaim>,
+    ) -> Result<DepositState> {
         let mut tx = self.write().await?;
+        if let Some(claim) = worker {
+            check_lease(&mut tx, claim, settle_at.ok_or(Error::InvalidTransition)?).await?;
+        }
         let evidence = deposit.evidence();
         let quote_id = evidence.quote_id.clone();
         let receipt = evidence.receipt.clone();
@@ -481,6 +515,31 @@ impl Repository {
                 .fetch_one(&mut *tx)
                 .await?;
         if exists != 0 {
+            if let Some(claim) = worker {
+                let outcome = if let Some(r) = a.receipt(&receipt) {
+                    r.state
+                } else {
+                    let data: String = sqlx::query_scalar(
+                        "SELECT data FROM mpesa_receipts_ledger WHERE receipt=?",
+                    )
+                    .bind(receipt.as_str())
+                    .fetch_one(&mut *tx)
+                    .await?;
+                    decode::<ConfirmedReceipt>(&data)?.state
+                };
+                finish_inbound(
+                    &mut tx,
+                    claim,
+                    settle_at.ok_or(Error::InvalidTransition)?,
+                    None,
+                    "DUPLICATE",
+                    false,
+                    false,
+                )
+                .await?;
+                tx.commit().await?;
+                return Ok(outcome);
+            }
             return Err(Error::DuplicateReceipt.into());
         }
         a.confirm(deposit)?;
@@ -511,10 +570,23 @@ impl Repository {
                 .fetch_one(&mut *tx)
                 .await?;
             if let Some(settle_at) = settle_at {
-                a.settle(id, settle_at)?;
+                let q = a.quote(id).ok_or(Error::NotFound)?;
+                if worker.is_none()
+                    || (matches!(
+                        q.state(),
+                        crate::inbound::InboundState::Verifying
+                            | crate::inbound::InboundState::SettlementHeld
+                    ) && settle_at >= q.terms().hold_until
+                        && q.terms()
+                            .fx
+                            .as_ref()
+                            .is_none_or(|fx| settle_at < fx.expires_at))
+                {
+                    a.settle(id, settle_at)?;
+                }
             }
             persist_accounting(&mut tx, &a, id, version).await?;
-        } else if settle_at.is_some() {
+        } else if settle_at.is_some() && worker.is_none() {
             return Err(Error::NotFound.into());
         }
         audit(
@@ -525,6 +597,23 @@ impl Repository {
         )
         .await?;
         let outcome = a.receipt(&receipt).ok_or(Error::NotFound)?.state;
+        if let Some(claim) = worker {
+            let retry = quote_id
+                .as_ref()
+                .and_then(|id| a.quote(id))
+                .filter(|q| q.state() == crate::inbound::InboundState::SettlementHeld)
+                .map(|q| q.terms().hold_until);
+            finish_inbound(
+                &mut tx,
+                claim,
+                settle_at.ok_or(Error::InvalidTransition)?,
+                retry,
+                "VERIFIED",
+                false,
+                false,
+            )
+            .await?;
+        }
         tx.commit().await?;
         Ok(outcome)
     }
@@ -631,6 +720,21 @@ impl Repository {
         Ok(())
     }
     pub async fn claim_job(&self, now: Timestamp, lease_seconds: u32) -> Result<Option<JobClaim>> {
+        self.claim_job_kind(now, lease_seconds, false).await
+    }
+    pub(crate) async fn claim_inbound_job(
+        &self,
+        now: Timestamp,
+        lease_seconds: u32,
+    ) -> Result<Option<JobClaim>> {
+        self.claim_job_kind(now, lease_seconds, true).await
+    }
+    async fn claim_job_kind(
+        &self,
+        now: Timestamp,
+        lease_seconds: u32,
+        inbound_only: bool,
+    ) -> Result<Option<JobClaim>> {
         if !(1..=300).contains(&lease_seconds) {
             return Err(Error::InvalidTransition.into());
         }
@@ -640,8 +744,8 @@ impl Repository {
                 .ok_or(Error::Overflow)?,
         );
         let mut tx = self.write().await?;
-        let row = sqlx::query("UPDATE durable_jobs SET lease_until=?,generation=generation+1 WHERE id=(SELECT id FROM durable_jobs WHERE completed_at IS NULL AND due_at<=? AND (lease_until IS NULL OR lease_until<=?) ORDER BY due_at,id LIMIT 1) RETURNING id,kind,subject,generation")
-            .bind(time(until)?).bind(time(now)?).bind(time(now)?).fetch_optional(&mut *tx).await?;
+        let row = sqlx::query("UPDATE durable_jobs SET lease_until=?,generation=generation+1 WHERE id=(SELECT id FROM durable_jobs WHERE completed_at IS NULL AND due_at<=? AND (lease_until IS NULL OR lease_until<=?) AND (?=0 OR kind IN ('POLL_STK','INBOUND_CALLBACK','VERIFY_RECEIPT')) ORDER BY due_at,id LIMIT 1) RETURNING id,kind,subject,generation,poll_slot,retry_count")
+            .bind(time(until)?).bind(time(now)?).bind(time(now)?).bind(inbound_only).fetch_optional(&mut *tx).await?;
         let claim = row
             .map(|r| {
                 Ok::<_, RepositoryError>(JobClaim {
@@ -650,6 +754,8 @@ impl Repository {
                     subject: Id::new(r.try_get::<String, _>("subject")?)?,
                     generation: r.try_get("generation")?,
                     lease_until: until,
+                    poll_slot: r.try_get("poll_slot")?,
+                    retry_count: r.try_get("retry_count")?,
                 })
             })
             .transpose()?;
@@ -669,6 +775,131 @@ impl Repository {
         }
         Ok(())
     }
+    pub(crate) async fn settle_inbound_hold(
+        &self,
+        claim: &JobClaim,
+        id: &Id,
+        now: Timestamp,
+    ) -> Result<bool> {
+        let mut tx = self.write().await?;
+        check_lease(&mut tx, claim, now).await?;
+        let mut a = load_accounting(&mut tx, Some(id)).await?;
+        let q = a.quote(id).ok_or(Error::NotFound)?;
+        if !matches!(
+            q.state(),
+            crate::inbound::InboundState::SettlementHeld | crate::inbound::InboundState::Verifying
+        ) || now < q.terms().hold_until
+            || q.terms().fx.as_ref().is_some_and(|fx| now >= fx.expires_at)
+        {
+            return Ok(false);
+        }
+        let version: i64 = sqlx::query_scalar("SELECT version FROM inbound_quotes WHERE id=?")
+            .bind(id.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+        a.settle(id, now)?;
+        persist_accounting(&mut tx, &a, id, version).await?;
+        finish_inbound(
+            &mut tx,
+            claim,
+            now,
+            None,
+            "VERIFIED_HOLD_RELEASED",
+            false,
+            false,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+    pub(crate) async fn finish_inbound_job(
+        &self,
+        claim: &JobClaim,
+        now: Timestamp,
+        retry: Option<Timestamp>,
+        reason: &str,
+        advance: bool,
+        throttled: bool,
+    ) -> Result<()> {
+        let mut tx = self.write().await?;
+        finish_inbound(&mut tx, claim, now, retry, reason, advance, throttled).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    pub(crate) async fn inbound_callback(
+        &self,
+        id: &Id,
+    ) -> Result<(String, Option<Id>, crate::crypto::Secret, Timestamp)> {
+        let row =
+            sqlx::query("SELECT endpoint,quote_id,body,received_at FROM callback_inbox WHERE id=?")
+                .bind(id.as_str())
+                .fetch_one(&self.pool)
+                .await?;
+        Ok((
+            row.try_get("endpoint")?,
+            row.try_get::<Option<String>, _>("quote_id")?
+                .map(Id::new)
+                .transpose()?,
+            crate::crypto::Secret::new(row.try_get::<String, _>("body")?),
+            Timestamp(row.try_get::<i64, _>("received_at")? as u64),
+        ))
+    }
+    pub(crate) async fn status_prepared(
+        &self,
+        id: &Id,
+        receipt: &crate::identity::ReceiptId,
+        now: Timestamp,
+    ) -> Result<bool> {
+        let mut tx = self.write().await?;
+        let inserted = sqlx::query("INSERT INTO inbound_status_queries(id,receipt,created_at) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING").bind(id.as_str()).bind(receipt.as_str()).bind(time(now)?).execute(&mut *tx).await?.rows_affected() == 1;
+        let old: String =
+            sqlx::query_scalar("SELECT receipt FROM inbound_status_queries WHERE id=?")
+                .bind(id.as_str())
+                .fetch_one(&mut *tx)
+                .await?;
+        if old != receipt.as_str() {
+            return Err(Error::EvidenceMismatch.into());
+        }
+        tx.commit().await?;
+        Ok(inserted)
+    }
+    pub(crate) async fn status_ack(
+        &self,
+        id: &Id,
+        originator: &Id,
+        conversation: &Id,
+    ) -> Result<()> {
+        changed(sqlx::query("UPDATE inbound_status_queries SET originator=?,conversation=? WHERE id=? AND (originator IS NULL OR originator=?) AND (conversation IS NULL OR conversation=?)").bind(originator.as_str()).bind(conversation.as_str()).bind(id.as_str()).bind(originator.as_str()).bind(conversation.as_str()).execute(&self.pool).await?.rows_affected())
+    }
+    pub(crate) async fn status_results(&self, id: &Id) -> Result<Vec<crate::crypto::Secret>> {
+        let rows: Vec<String> = sqlx::query_scalar("SELECT i.body FROM callback_inbox i JOIN inbound_status_queries q ON json_extract(i.body,'$.Result.OriginatorConversationID')=q.originator AND json_extract(i.body,'$.Result.ConversationID')=q.conversation WHERE q.id=? AND i.endpoint='/callbacks/status/result/{secret}' ORDER BY i.received_at,i.id LIMIT 100").bind(id.as_str()).fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(crate::crypto::Secret::new).collect())
+    }
+}
+async fn check_lease(conn: &mut SqliteConnection, claim: &JobClaim, now: Timestamp) -> Result<()> {
+    let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM durable_jobs WHERE id=? AND generation=? AND completed_at IS NULL AND lease_until>?)").bind(claim.id.as_str()).bind(claim.generation).bind(time(now)?).fetch_one(conn).await?;
+    if !valid {
+        return Err(RepositoryError::LeaseLost);
+    }
+    Ok(())
+}
+async fn finish_inbound(
+    conn: &mut SqliteConnection,
+    claim: &JobClaim,
+    now: Timestamp,
+    retry: Option<Timestamp>,
+    reason: &str,
+    advance: bool,
+    throttled: bool,
+) -> Result<()> {
+    check_lease(conn, claim, now).await?;
+    sqlx::query("UPDATE durable_jobs SET due_at=coalesce(?,due_at),completed_at=?,lease_until=NULL,poll_slot=poll_slot+?,retry_count=?,last_reason=? WHERE id=? AND generation=?")
+        .bind(retry.map(time).transpose()?).bind(if retry.is_none() {Some(time(now)?)} else {None}).bind(i64::from(advance)).bind(if throttled {claim.retry_count.saturating_add(1)} else {0}).bind(reason).bind(claim.id.as_str()).bind(claim.generation).execute(&mut *conn).await?;
+    if claim.kind == "INBOUND_CALLBACK" {
+        sqlx::query("UPDATE callback_jobs SET due_at=coalesce(?,due_at),completed_at=? WHERE observation_id=?")
+            .bind(retry.map(time).transpose()?).bind(if retry.is_none() {Some(time(now)?)} else {None}).bind(claim.subject.as_str()).execute(conn).await?;
+    }
+    Ok(())
 }
 async fn audit(
     conn: &mut SqliteConnection,

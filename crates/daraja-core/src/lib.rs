@@ -9,6 +9,7 @@ pub mod identity;
 pub mod inbound;
 pub mod outbound;
 pub mod payout;
+pub mod reconcile;
 pub mod repository;
 mod storage;
 pub mod transport;

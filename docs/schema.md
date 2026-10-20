@@ -1,7 +1,7 @@
 # SQLite repository
 
 Owner: `daraja-core::repository::Repository`; domain rules remain in `inbound`,
-`outbound`, `amount` and `identity`. Three ordered, embedded SQLx migrations live in
+`outbound`, `amount` and `identity`. Four ordered, embedded SQLx migrations live in
 `crates/daraja-core/migrations`. SQLx records/checks their versions and checksums;
 `build.rs` watches the directory. Never edit an applied migration: add a new one.
 Opening a database applies missing migrations and rejects checksum mismatch.
@@ -38,9 +38,10 @@ A timer or lost lease never fails an ambiguous payout or releases its reservatio
 | `stk_attempts` | Separate unique attempt/caller/merchant/checkout identities; quote FK; persisted poll/cooldown times and complete attempt snapshot. Global uniqueness also covers attempts on different quotes. |
 | `request_bindings` | Composite caller/operation/key primary key binds canonical SHA-256 payload and original operation. Immutable after insertion. Payout preparation inserts binding atomically with payout/reservation/job; equal retries return original operation, changed payloads conflict. |
 | `callback_inbox` | Stage 07 untrusted canonical callback envelopes, static endpoint, nullable quote hint, received time and domain-separated SHA-256 delivery identity. Contains sensitive provider data; never receipt allocation authority. |
-| `callback_jobs` | One pending work record per inbox observation, due time and eventual completion time. Inserts atomically with inbox acceptance; consumers/leases arrive with later workers. |
-| `durable_jobs` | Unique kind/subject, stable job identity, due time, bounded lease expiry, increasing generation and completion time. Kinds are VERIFY_RECEIPT, POLL_STK and RECONCILE_PAYOUT. |
-| `settlement_events` | Stable increasing sequence for consumer cursors plus unique quote identity, time and credit/receipt payload. Quote mutation, all receipt dispositions, hold resolutions and event insertion commit atomically. Consumer cursors belong to future adapters. |
+| `callback_jobs` | One pending work record per inbox observation, due time and eventual completion time. Inserts atomically with inbox acceptance. Stage 09 mirrors inbound due/completion state from leased durable_jobs; other consumers remain later stages. |
+| `durable_jobs` | Unique kind/subject, stable job identity, due time, bounded lease expiry, increasing generation and completion time. Kinds are VERIFY_RECEIPT, POLL_STK, INBOUND_CALLBACK and RECONCILE_PAYOUT. Migration 0004 adds poll_slot, retry_count and static last_reason, preserves leases/generations, and schedules existing inbound callback jobs. |
+| `settlement_events` | Stable increasing sequence for consumer cursors plus unique quote identity, time and credit/receipt payload. Quote mutation, all receipt dispositions, hold resolutions and event insertion commit atomically. Stage 09 exposes polling and resumable consumption with consumer-owned durable cursors. |
+| `inbound_status_queries` | Stage 09 local query ID, immutable-by-adapter receipt lookup and creation time committed before I/O; nullable separately unique provider originator/conversation IDs. Ambiguous prepared queries are never automatically resubmitted. |
 | `balance_reservations` | One exact amount-plus-fee reservation per payout. Release requires a domain-validated terminal evidence resolution and shares its transaction. These are durable commitments, not a substitute for stage 14's balance freshness/admission policy. |
 | `audit_records` | Ordered subject/action/time records written with financial mutations. UPDATE/DELETE are rejected. Evidence resides in the associated financial records; no raw callback URL/MSISDN/credentials are copied into audit text. Operator identity/authorization workflow remains stage 15. |
 
@@ -76,9 +77,10 @@ last 1–300 seconds. Expired jobs can be reclaimed; each claim increments its
 fencing generation. Completion/rescheduling requires that generation and a still
 unexpired lease. `finish_job(..., Some(next_due))` reschedules, while None completes.
 Workers supply UTC seconds consistently; there is no process-memory clock/queue
-required for recovery. Completion need not share settlement's transaction: a crash
-between them causes verification redelivery, and the confirmed ledger must be
-checked before acknowledging that work. Stale workers cannot double-settle because
+required for recovery. The generic completion API remains available. The stage 09 inbound worker shares
+lease validation and job completion with confirmation/settlement/event insertion
+in one transaction. A crash before commit rolls back; a crash after commit leaves
+the durable event available for replay. Stale workers cannot double-settle because
 receipt uniqueness, domain terminal guards and transactional event uniqueness
 remain authoritative independently of the job lease.
 
@@ -105,7 +107,8 @@ probe; a lease or local mock is no such authorization.
 See [SQLite integration tests](../crates/daraja-core/tests/sqlite.rs) for file-backed migration/upgrade, writer,
 receipt, rollback, event replay, reservation, lease fencing and abrupt-process
 recovery checks. Stage 03 adds persistence primitives; it does not implement the
-stage 09/12/13 provider workers, stage 14 liquidity admission or a public daemon API.
+stage 12/13 payout workers, stage 14 liquidity admission or a public daemon API.
+Stage 09 now supplies [inbound workers and durable notification replay](inbound-reconcile.md).
 
 ## Stage 08 checkout transaction
 
