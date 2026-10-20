@@ -12,6 +12,11 @@ consumer_secret = "REPLACE_LOCALLY"
 initiator_name = "REPLACE_LOCALLY"
 initiator_password = "REPLACE_LOCALLY"
 
+# Obtain and authenticate each environment certificate from Safaricom.
+[certificates]
+sandbox = "REPLACE_LOCALLY"
+production = "REPLACE_LOCALLY"
+
 [capabilities]
 live_payments = false
 b2c_duplicate_probe = false

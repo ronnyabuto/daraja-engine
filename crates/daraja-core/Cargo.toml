@@ -11,10 +11,21 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["time", "sync"] }
+base64 = "=0.22.1"
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
+reqwest = { version = "=0.12.24", default-features = false, features = ["rustls-tls"] }
+rsa = "=0.9.10"
+tokio-util = { version = "=0.7.19", features = ["rt"] }
+x509-cert = { version = "=0.2.5", features = ["pem"] }
+zeroize = "=1.9.1"
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 tempfile = "=3.27.0"
+axum.workspace = true
+tokio = { workspace = true, features = ["test-util", "net", "time", "sync"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.20", features = ["fmt"] }

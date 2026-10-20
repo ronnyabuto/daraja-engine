@@ -1,6 +1,8 @@
 //! Financial domain contracts. Persistence and trusted provider verification are separate boundaries.
 
 pub mod amount;
+pub mod auth;
+pub mod crypto;
 pub mod identity;
 pub mod inbound;
 pub mod outbound;
