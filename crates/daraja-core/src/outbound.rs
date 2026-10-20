@@ -1,0 +1,256 @@
+use crate::{
+    Error, Timestamp,
+    amount::{Amount, TariffSnapshot},
+    identity::{Correlation, Id, PayloadHash, ReceiptId, RequestPayload},
+    inbound::EvidenceSource,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutboundState {
+    Dispatching,
+    UnknownInFlight,
+    Pending,
+    Paid,
+    Failed,
+    ManualReconciliationRequired,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CdkPaymentState {
+    Pending,
+    Paid,
+    Failed,
+}
+
+impl OutboundState {
+    pub fn cdk_state(self) -> CdkPaymentState {
+        match self {
+            Self::Paid => CdkPaymentState::Paid,
+            Self::Failed => CdkPaymentState::Failed,
+            _ => CdkPaymentState::Pending,
+        }
+    }
+}
+
+/// Frozen before dispatch. Persistence must commit this record before provider I/O.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DispatchRecord {
+    operation_id: Id,
+    payload: RequestPayload,
+    hash: PayloadHash,
+    wire_body: Vec<u8>,
+    tariff: TariffSnapshot,
+    reserved: Amount,
+}
+
+impl std::fmt::Debug for DispatchRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DispatchRecord([redacted])")
+    }
+}
+
+impl DispatchRecord {
+    pub fn new(
+        operation_id: Id,
+        payload: RequestPayload,
+        wire_body: Vec<u8>,
+        tariff: TariffSnapshot,
+        reserved: Amount,
+    ) -> Result<Self, Error> {
+        payload.amount.require_kes()?;
+        if payload.amount.value() == 0 || wire_body.is_empty() {
+            return Err(Error::InvalidAmount);
+        }
+        if payload.tariff_version != tariff.version {
+            return Err(Error::EvidenceMismatch);
+        }
+        if payload.amount.checked_add(tariff.fee)? != reserved {
+            return Err(Error::AmountMismatch);
+        }
+        Ok(Self {
+            operation_id,
+            hash: payload.hash(),
+            payload,
+            wire_body,
+            tariff,
+            reserved,
+        })
+    }
+
+    pub fn operation_id(&self) -> &Id {
+        &self.operation_id
+    }
+    pub fn payload(&self) -> &RequestPayload {
+        &self.payload
+    }
+    pub fn hash(&self) -> PayloadHash {
+        self.hash
+    }
+    pub fn wire_body(&self) -> &[u8] {
+        &self.wire_body
+    }
+    pub fn tariff(&self) -> &TariffSnapshot {
+        &self.tariff
+    }
+    pub fn reserved(&self) -> Amount {
+        self.reserved
+    }
+}
+
+/// Final evidence must refer to this exact dispatch. Correlation alone is not provenance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PayoutAttestation {
+    pub source: EvidenceSource,
+    pub operation_id: Id,
+    pub payload_hash: PayloadHash,
+    pub amount: Amount,
+    pub destination: Id,
+    pub outcome: FinalOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FinalOutcome {
+    Paid {
+        receipt: ReceiptId,
+    },
+    /// An independently verified final nonexecution, not a timeout, absence or duplicate error.
+    DefinitivelyNotExecuted {
+        evidence_record: Id,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ambiguity {
+    TransportError,
+    Http500,
+    Http503,
+    Timeout,
+    QueueTimeout,
+    WorkerRecovery,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Payout {
+    dispatch: DispatchRecord,
+    correlation: Correlation,
+    state: OutboundState,
+    started_at: Timestamp,
+    next_check_at: Timestamp,
+    manual_after: Timestamp,
+    final_evidence: Option<PayoutAttestation>,
+}
+
+impl Payout {
+    pub fn dispatching(
+        dispatch: DispatchRecord,
+        caller_request: Id,
+        started_at: Timestamp,
+        next_check_at: Timestamp,
+        manual_after: Timestamp,
+    ) -> Result<Self, Error> {
+        if next_check_at < started_at || manual_after < next_check_at {
+            return Err(Error::InvalidTransition);
+        }
+        Ok(Self {
+            correlation: Correlation {
+                caller_request,
+                originator_conversation: dispatch.operation_id.clone(),
+                provider_originator: None,
+                provider_conversation: None,
+            },
+            dispatch,
+            state: OutboundState::Dispatching,
+            started_at,
+            next_check_at,
+            manual_after,
+            final_evidence: None,
+        })
+    }
+
+    pub fn state(&self) -> OutboundState {
+        self.state
+    }
+    pub fn dispatch(&self) -> &DispatchRecord {
+        &self.dispatch
+    }
+    pub fn correlation(&self) -> &Correlation {
+        &self.correlation
+    }
+    pub fn started_at(&self) -> Timestamp {
+        self.started_at
+    }
+    pub fn next_check_at(&self) -> Timestamp {
+        self.next_check_at
+    }
+    pub fn manual_after(&self) -> Timestamp {
+        self.manual_after
+    }
+    pub fn final_evidence(&self) -> Option<&PayoutAttestation> {
+        self.final_evidence.as_ref()
+    }
+
+    fn nonterminal(&self) -> Result<(), Error> {
+        if matches!(self.state, OutboundState::Paid | OutboundState::Failed) {
+            return Err(Error::InvalidTransition);
+        }
+        Ok(())
+    }
+
+    pub fn acknowledge(
+        &mut self,
+        provider_originator: Id,
+        provider_conversation: Id,
+    ) -> Result<(), Error> {
+        self.nonterminal()?;
+        self.correlation
+            .acknowledge(provider_originator, provider_conversation)?;
+        if self.state != OutboundState::ManualReconciliationRequired {
+            self.state = OutboundState::Pending;
+        }
+        Ok(())
+    }
+
+    pub fn ambiguous(&mut self, _reason: Ambiguity) -> Result<(), Error> {
+        self.nonterminal()?;
+        if self.state == OutboundState::Dispatching {
+            self.state = OutboundState::UnknownInFlight;
+        }
+        Ok(())
+    }
+
+    /// Duplicate rejection is an observation, never final settlement or permission to retry.
+    pub fn duplicate_observed(&mut self) -> Result<(), Error> {
+        self.nonterminal()?;
+        if self.state != OutboundState::ManualReconciliationRequired {
+            self.state = OutboundState::Pending;
+        }
+        Ok(())
+    }
+
+    pub fn escalate(&mut self, now: Timestamp) -> Result<(), Error> {
+        self.nonterminal()?;
+        if now < self.manual_after {
+            return Err(Error::InvalidTransition);
+        }
+        self.state = OutboundState::ManualReconciliationRequired;
+        Ok(())
+    }
+
+    /// Caller must obtain independently trusted final evidence; this validates binding only.
+    pub fn resolve(&mut self, evidence: PayoutAttestation) -> Result<(), Error> {
+        self.nonterminal()?;
+        if evidence.operation_id != self.dispatch.operation_id
+            || evidence.payload_hash != self.dispatch.hash
+            || evidence.amount != self.dispatch.payload.amount
+            || evidence.destination != self.dispatch.payload.destination
+        {
+            return Err(Error::EvidenceMismatch);
+        }
+        self.state = match evidence.outcome {
+            FinalOutcome::Paid { .. } => OutboundState::Paid,
+            FinalOutcome::DefinitivelyNotExecuted { .. } => OutboundState::Failed,
+        };
+        self.final_evidence = Some(evidence);
+        Ok(())
+    }
+}
