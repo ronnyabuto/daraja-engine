@@ -14,7 +14,10 @@ Implemented and locally tested:
 - STK processrequest/query, explicit C2B registration and asynchronous
   TransactionStatus clients: [collection transport](../../docs/collection-transport.md).
 
-Provider verification, callback ingress, payout transports and reconciliation
+- Gated B2C/B2B payout and balance clients, immutable dispatch preparation and
+  asynchronous observations: [payout transport](../../docs/payout-transport.md).
+
+Provider verification, callback ingress and reconciliation
 workers remain under development. Local tests do not establish live provider
 permissions or settlement evidence. See the [roadmap](../../docs/roadmap.md) and
 [verification gates](../../docs/verification-gates.md).

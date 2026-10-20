@@ -33,6 +33,11 @@ probe response to an enabled flag.
 | CDK-KES | Stages 17/19; custom-unit source/types | Actual mpesa/`kes` mint routes/settings/keyset configuration, issue/spend/melt with exact amounts. No accidental sat conversion. |
 | CDK-SAT | Stages 17/19; built-in unit and custom-method source/types | Actual mpesa/`sat` issuance/melt, FX TTL and rounding/reservations; unsupported wallets remain unsupported. |
 | SWEEP | Stages 14/27; no account evidence | Linked-account entitlement, command/endpoint approval, float reconciliation and restricted authorization. Do not infer support from an unrelated top-up command. |
+| WIRE-BUYGOODS / WIRE-PAYBILL | Stage 06; current primary pages return documentation shells | Verify each exact command, identifier pair (4/2, 4/4), request/response schema, destination and reference constraints against the approved environment/account. Local candidate fixtures are not provider acceptance. |
+| WIRE-B2B-ID | Stage 06; caller-ID acceptance remains unverified | Verify B2B accepts caller OriginatorConversationID alongside separately returned proxy/provider IDs. This gate does not establish duplicate suppression. |
+| B2C-01 | Stage 06; no current primary acceptance evidence | Confirm 2541 destinations for the specific B2C product; local normalization alone is insufficient. |
+| BALANCE-TILL | Stage 06; historical request schema only | Verify AccountBalance IdentifierType=2 for the configured till and app/role. Shortcode queries use 4. |
+| WIRE-MMF | Stage 06; no verified BusinessTransferFromMMFToUtility contract | Confirm this exact command, endpoint, identifier pair, account mapping and permission. Current B2CAccountTopUp documents BusinessPayToBulk; it is not interchangeable. SWEEP remains independently required. |
 | LEGAL | Operator/counsel; dated sources below, no deployment clearance | Written classification for the actual entity, product, token, custody, jurisdictions, accounts, customers and flows; applicable licences/exemptions and ongoing controls. |
 
 Before automatic resubmission, **both** endpoint families need their independent

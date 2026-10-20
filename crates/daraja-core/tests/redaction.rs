@@ -6,7 +6,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use daraja_core::{
     amount::{Amount, Unit},
-    auth::{AuthError, CollectionApp, OAuthConfig},
+    auth::{AuthError, CollectionApp, DisbursementApp, OAuthConfig},
     collection::{
         C2bRegistration, C2bResponsePolicy, CollectionClient, StatusAcknowledgment,
         StatusCredentials, StatusIdentifierType, StatusLookup, StatusPersistence, StatusPrepared,
@@ -14,6 +14,11 @@ use daraja_core::{
     },
     crypto::{Clock, Environment, Secret, SecurityCredentialKey, stk_password},
     identity::Id,
+    payout::{
+        BalanceAccount, BalanceClient, BalancePersistence, BalancePrepared, BalanceRequest,
+        Capabilities, Destination, PayoutAcknowledgment, PayoutClient, PayoutPersistence,
+        PayoutRequest, PreparedPayout, Remitter,
+    },
     transport::{ReqwestTransport, Result as TransportResult},
 };
 use std::{
@@ -68,6 +73,9 @@ async fn debug_errors_and_trace_output_omit_secrets_at_http_and_crypto_boundarie
         .route("/mpesa/stkpush/v1/processrequest", post(provider_error))
         .route("/mpesa/c2b/v1/registerurl", post(provider_error))
         .route("/mpesa/transactionstatus/v1/query", post(provider_error))
+        .route("/mpesa/b2b/v1/paymentrequest", post(provider_error))
+        .route("/mpesa/b2c/v3/paymentrequest", post(provider_error))
+        .route("/mpesa/accountbalance/v1/query", post(provider_error))
         .route("/ok", get(|| async { axum::Json(serde_json::json!({"access_token":"synthetic-bearer-redaction-marker", "expires_in":3600})) }))
         .route("/bad", get(|| async { (StatusCode::UNAUTHORIZED, "synthetic-provider-error-secret") }));
     let server = tokio::spawn(async move {
@@ -171,6 +179,84 @@ async fn debug_errors_and_trace_output_omit_secrets_at_http_and_crypto_boundarie
     };
     let error = status.request(&request, &Hooks).await.unwrap_err();
     tracing::debug!(?request, ?error);
+    struct PayoutHooks;
+    impl PayoutPersistence for PayoutHooks {
+        async fn prepare(&self, payout: &PreparedPayout) -> TransportResult<()> {
+            tracing::debug!(?payout);
+            Ok(())
+        }
+        async fn acknowledge(&self, _: &PayoutAcknowledgment) -> TransportResult<()> {
+            Ok(())
+        }
+    }
+    let remitter = || {
+        Remitter::new(
+            Environment::Sandbox,
+            &key,
+            Secret::new("synthetic-remitter-marker"),
+            &password,
+            Id::new("600000").unwrap(),
+        )
+        .unwrap()
+    };
+    let payout_actor = DisbursementApp::new(config("ok")).unwrap();
+    let mut payout = PayoutClient::new(
+        transport(),
+        url.parse().unwrap(),
+        payout_actor.clone(),
+        remitter(),
+        250000,
+    )
+    .unwrap();
+    payout
+        .configure_capabilities(
+            Capabilities {
+                buy_goods: true,
+                pay_bill: true,
+                b2b_caller_id: true,
+                ..Capabilities::default()
+            },
+            None,
+        )
+        .unwrap();
+    for destination in ["TILL:123456", "PAYBILL:654321:PRIVATE123", "254799888777"] {
+        let request = PayoutRequest {
+            caller_originator_conversation_id: Id::new("synthetic-caller-marker").unwrap(),
+            destination: Destination::parse(destination).unwrap(),
+            amount: Amount::new(100, Unit::KesMinor),
+            result_url: Secret::new("https://example.invalid/result-secret-marker"),
+            timeout_url: Secret::new("https://example.invalid/timeout-secret-marker"),
+        };
+        let error = payout.submit(&request, &PayoutHooks).await.unwrap_err();
+        tracing::debug!(?request, ?error, message = %error);
+    }
+    struct BalanceHooks;
+    impl BalancePersistence for BalanceHooks {
+        async fn prepare(&self, record: BalancePrepared<'_>) -> TransportResult<()> {
+            tracing::debug!(?record);
+            Ok(())
+        }
+        async fn acknowledge(&self, _: &Id, _: &StatusAcknowledgment) -> TransportResult<()> {
+            Ok(())
+        }
+    }
+    let balance = BalanceClient::new(
+        transport(),
+        url.parse().unwrap(),
+        StatusCredentials::Collection(actor.clone()),
+        remitter(),
+        FixedClock,
+    )
+    .unwrap();
+    let request = BalanceRequest {
+        local_query_id: Id::new("synthetic-balance-marker").unwrap(),
+        account: BalanceAccount::Shortcode(Id::new("600000").unwrap()),
+        result_url: Secret::new("https://example.invalid/result-secret-marker"),
+        timeout_url: Secret::new("https://example.invalid/timeout-secret-marker"),
+    };
+    let error = balance.request(&request, &BalanceHooks).await.unwrap_err();
+    tracing::debug!(?request, ?error);
+    payout_actor.cancel();
     actor.cancel();
     bad.cancel();
     server.abort();
@@ -178,6 +264,10 @@ async fn debug_errors_and_trace_output_omit_secrets_at_http_and_crypto_boundarie
     let output = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
     assert!(output.contains("REDACTED"));
     for secret in [
+        "synthetic-remitter-marker",
+        "synthetic-caller-marker",
+        "synthetic-balance-marker",
+        "PRIVATE123",
         "callback-secret-marker",
         "query-secret-marker",
         "description-secret-marker",

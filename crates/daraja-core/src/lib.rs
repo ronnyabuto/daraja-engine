@@ -7,6 +7,7 @@ pub mod crypto;
 pub mod identity;
 pub mod inbound;
 pub mod outbound;
+pub mod payout;
 pub mod repository;
 mod storage;
 pub mod transport;

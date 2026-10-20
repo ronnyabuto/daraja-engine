@@ -1,15 +1,15 @@
 //! Collection operations and asynchronous status observations, never settlement evidence.
 use crate::{
     amount::{Amount, Unit},
-    auth::{CollectionApp, DisbursementApp, OAuthActor},
+    auth::{CollectionApp, DisbursementApp},
     crypto::{Clock, Secret, stk_password},
     identity::{Id, ReceiptId},
     transport::{
-        ClientError, ErrorKind, HttpRequest, HttpResponse, HttpTransport, Outcome, Result,
-        validate_base,
+        ClientError, ErrorKind, HttpTransport, Outcome, Result, authorized_send, callback_url,
+        invalid, required_id, scalar, strict_json, validate_base,
     },
 };
-use reqwest::{Url, header::HeaderValue};
+use reqwest::Url;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, future::Future, time::Duration};
 
@@ -220,22 +220,6 @@ impl<T: HttpTransport, C: Clock> CollectionClient<T, C> {
         Ok(outcome)
     }
 }
-fn auth_error(error: crate::auth::AuthError) -> ClientError {
-    ClientError::new(ErrorKind::Auth(error))
-}
-fn callback_url(secret: &Secret) -> Result<()> {
-    let url = Url::parse(secret.expose()).map_err(|_| ClientError::new(ErrorKind::Input))?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(ClientError::new(ErrorKind::Input));
-    }
-    Ok(())
-}
-
 /// The app must match the account being queried; no fallback between credential actors.
 pub enum StatusCredentials {
     Collection(CollectionApp),
@@ -380,118 +364,11 @@ impl<T: HttpTransport, C: Clock> TransactionStatusClient<T, C> {
     }
 }
 
-async fn authorized_send<App>(
-    app: &OAuthActor<App>,
-    transport: &impl HttpTransport,
-    base: &Url,
-    path: &str,
-    body: Value,
-) -> Result<(Value, Outcome)> {
-    let mut attempt = app.authorize().await.map_err(auth_error)?;
-    let header = attempt
-        .token()
-        .expect("new authorization attempt")
-        .authorization()
-        .map_err(auth_error)?;
-    let result = send(transport, base, path, header, body).await;
-    if result
-        .as_ref()
-        .is_err_and(|error| error.outcome.http_status == Some(401))
-    {
-        // Refresh the rejected generation for future calls, preserving this request's outcome.
-        let _ = attempt.refresh_after_unauthorized().await;
-    }
-    result
-}
-
-async fn send(
-    transport: &impl HttpTransport,
-    base: &Url,
-    path: &str,
-    authorization: HeaderValue,
-    body: Value,
-) -> Result<(Value, Outcome)> {
-    let response = transport
-        .post(HttpRequest {
-            url: base
-                .join(path)
-                .map_err(|_| ClientError::new(ErrorKind::Config))?,
-            authorization,
-            body: Secret::new(body.to_string()),
-        })
-        .await?;
-    decode_response(response)
-}
-fn decode_response(response: HttpResponse) -> Result<(Value, Outcome)> {
-    let mut outcome = Outcome {
-        http_status: Some(response.status),
-        request_id: response.request_id,
-        ..Outcome::default()
-    };
-    let value = strict_json(response.body.expose()).map_err(|_| ClientError {
-        kind: if (200..300).contains(&response.status) {
-            ErrorKind::InvalidResponse
-        } else {
-            ErrorKind::Http
-        },
-        outcome: Box::new(outcome.clone()),
-    })?;
-    outcome.request_id = optional_id(&value, "requestId").or(outcome.request_id);
-    outcome.provider_code =
-        optional_id(&value, "errorCode").or_else(|| optional_id(&value, "ResponseCode"));
-    outcome.originator_conversation_id = optional_id(&value, "OriginatorConversationID");
-    outcome.conversation_id = optional_id(&value, "ConversationID");
-    outcome.merchant_request_id = optional_id(&value, "MerchantRequestID");
-    outcome.checkout_request_id = optional_id(&value, "CheckoutRequestID");
-    let kind = if outcome
-        .provider_code
-        .as_ref()
-        .is_some_and(|c| c.as_str() == "500.001.1001")
-    {
-        Some(ErrorKind::Throttled)
-    } else if !(200..300).contains(&response.status) {
-        Some(ErrorKind::Http)
-    } else if value.get("errorCode").is_some() {
-        Some(ErrorKind::Provider)
-    } else {
-        match outcome.provider_code.as_ref().map(Id::as_str) {
-            Some("0") => None,
-            Some(_) => Some(ErrorKind::Provider),
-            None => Some(ErrorKind::InvalidResponse),
-        }
-    };
-    if let Some(kind) = kind {
-        return Err(ClientError {
-            kind,
-            outcome: Box::new(outcome),
-        });
-    }
-    Ok((value, outcome))
-}
-fn invalid(outcome: &Outcome) -> ClientError {
-    ClientError {
-        kind: ErrorKind::InvalidResponse,
-        outcome: Box::new(outcome.clone()),
-    }
-}
-fn optional_id(value: &Value, field: &str) -> Option<Id> {
-    scalar(value.get(field)?).and_then(|s| Id::new(s).ok())
-}
-fn required_id(value: &Value, field: &str, outcome: &Outcome) -> Result<Id> {
-    optional_id(value, field).ok_or_else(|| invalid(outcome))
-}
-fn scalar(value: &Value) -> Option<String> {
-    match value {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) if n.is_i64() || n.is_u64() => Some(n.to_string()),
-        _ => None,
-    }
-}
-
 pub struct StatusResult {
     pub originator_conversation_id: Id,
     pub conversation_id: Id,
     pub result_code: Id,
+    pub result_type: Option<Id>,
     pub transaction_id: Option<Id>,
     pub parameters: BTreeMap<String, Secret>,
     pub observed_amount: Option<Amount>,
@@ -552,6 +429,11 @@ impl StatusResult {
             return Err(invalid(&outcome));
         }
         Ok(Self {
+            result_type: if value.get("ResultType").is_some() {
+                Some(required_id(value, "ResultType", &outcome)?)
+            } else {
+                None
+            },
             observed_amount,
             receipt,
             originator_conversation_id: required_id(value, "OriginatorConversationID", &outcome)?,
@@ -601,70 +483,4 @@ pub fn parse_kes(value: &Value) -> Result<Amount> {
         .filter(|n| *n > 0)
         .ok_or_else(|| ClientError::new(ErrorKind::Input))?;
     Ok(Amount::new(minor, Unit::KesMinor))
-}
-
-fn strict_json(text: &str) -> std::result::Result<Value, serde_json::Error> {
-    use serde::Deserialize;
-    if text.len() > 64 * 1024 {
-        return Err(<serde_json::Error as serde::de::Error>::custom(
-            "body too large",
-        ));
-    }
-    struct Unique(Value);
-    impl<'de> Deserialize<'de> for Unique {
-        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-            struct Visitor;
-            impl<'de> serde::de::Visitor<'de> for Visitor {
-                type Value = Unique;
-                fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    f.write_str("JSON without duplicate keys")
-                }
-                fn visit_map<A: serde::de::MapAccess<'de>>(
-                    self,
-                    mut map: A,
-                ) -> std::result::Result<Unique, A::Error> {
-                    let mut object = serde_json::Map::new();
-                    while let Some((key, Unique(value))) = map.next_entry::<String, Unique>()? {
-                        if object.insert(key, value).is_some() {
-                            return Err(serde::de::Error::custom("duplicate key"));
-                        }
-                    }
-                    Ok(Unique(Value::Object(object)))
-                }
-                fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                    self,
-                    mut seq: A,
-                ) -> std::result::Result<Unique, A::Error> {
-                    let mut items = Vec::new();
-                    while let Some(Unique(item)) = seq.next_element()? {
-                        items.push(item);
-                    }
-                    Ok(Unique(Value::Array(items)))
-                }
-                fn visit_str<E: serde::de::Error>(self, s: &str) -> std::result::Result<Unique, E> {
-                    Ok(Unique(Value::String(s.to_owned())))
-                }
-                fn visit_bool<E: serde::de::Error>(
-                    self,
-                    b: bool,
-                ) -> std::result::Result<Unique, E> {
-                    Ok(Unique(Value::Bool(b)))
-                }
-                fn visit_i64<E: serde::de::Error>(self, n: i64) -> std::result::Result<Unique, E> {
-                    Ok(Unique(json!(n)))
-                }
-                fn visit_u64<E: serde::de::Error>(self, n: u64) -> std::result::Result<Unique, E> {
-                    Ok(Unique(json!(n)))
-                }
-                fn visit_f64<E: serde::de::Error>(self, _: f64) -> std::result::Result<Unique, E> {
-                    Err(E::custom("floating point unsupported"))
-                }
-                fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Unique, E> {
-                    Ok(Unique(Value::Null))
-                }
-            }
-            d.deserialize_any(Visitor)
-        }
-    }
-    serde_json::from_str::<Unique>(text).map(|v| v.0)
 }

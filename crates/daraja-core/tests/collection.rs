@@ -146,6 +146,9 @@ impl Server {
             .route("/mpesa/stkpushquery/v1/query", post(endpoint))
             .route("/mpesa/c2b/v1/registerurl", post(endpoint))
             .route("/mpesa/transactionstatus/v1/query", post(endpoint))
+            .route("/mpesa/b2c/v3/paymentrequest", post(endpoint))
+            .route("/mpesa/b2b/v1/paymentrequest", post(endpoint))
+            .route("/mpesa/accountbalance/v1/query", post(endpoint))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap())
@@ -833,3 +836,6 @@ async fn injected_transport_preserves_sensitive_headers_and_enforces_body_limit(
     );
     assert_eq!(server.count(), 1);
 }
+
+#[path = "support/payout.rs"]
+mod payout_contract;

@@ -117,6 +117,10 @@ impl<App> fmt::Debug for OAuthActor<App> {
     }
 }
 impl<App> OAuthActor<App> {
+    pub(crate) fn matches_origin(&self, base: &Url) -> bool {
+        self.inner.config.endpoint.origin() == base.origin()
+    }
+
     /// Requires a Tokio runtime. Plain HTTP is accepted only for loopback fixtures.
     pub fn new(config: OAuthConfig) -> Result<Self, AuthError> {
         let local = config.endpoint.host_str().is_some_and(|host| {

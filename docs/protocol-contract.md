@@ -234,3 +234,11 @@ their restart test stops/starts the mint over the retained store rather than
 restarting a process and reopening a production database. Combined gRPC fault,
 durable process restart and custom mpesa/KES/sat mint tests remain a stage 19
 gate; source tracing above is the explicit limit of the stage 01 evidence.
+
+## Stage 06 transport boundary
+
+[Payout and balance transport](payout-transport.md) records implemented field
+spellings, gated command/identifier candidates, local input policy and remaining
+current-contract access limits. The current top-up command BusinessPayToBulk is
+not evidence for BusinessTransferFromMMFToUtility. New wire/01/till gates remain
+disabled independently of DUP-B2C, DUP-B2B and SWEEP.

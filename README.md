@@ -6,13 +6,13 @@ through the CDK payment processor protocol.
 The repository contains one Cargo workspace:
 
 - [daraja-core](crates/daraja-core): financial domain types, SQLite persistence,
-  OAuth and cryptography, and collection/query HTTP clients.
+  OAuth and cryptography, and collection/query/payout HTTP clients.
 - [cdk-daraja-processor](crates/cdk-daraja-processor): pinned CDK protobuf types
   and a processor library/binary under development.
 - [daraja-daemon](crates/daraja-daemon): planned REST/gRPC sidecar.
 
-**Work in progress.** Stages 00–05 are locally verified. Reconciliation workers,
-payout transports, callback ingress and runnable services remain unimplemented.
+**Work in progress.** Stages 00–06 are locally verified. Reconciliation workers,
+callback ingress and runnable services remain unimplemented.
 Both binaries exit unsuccessfully with an explicit diagnostic. No live provider
 or combined mint integration has been verified; all external capabilities default
 to disabled. See the [roadmap](docs/roadmap.md) for the remaining work.
@@ -23,6 +23,7 @@ to disabled. See the [roadmap](docs/roadmap.md) for the remaining work.
 - [SQLite schema and recovery contracts](docs/schema.md)
 - [Credential and cryptography contracts](docs/auth-crypto.md)
 - [Collection and query transport](docs/collection-transport.md)
+- [Payout and balance transport](docs/payout-transport.md)
 - [Pinned protocol and provider findings](docs/protocol-contract.md)
 - [Verification gates](docs/verification-gates.md)
 
