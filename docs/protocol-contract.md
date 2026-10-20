@@ -271,3 +271,15 @@ frozen endpoint/body/credentials, transactional acknowledgment IDs and staged
 callback correlation. No wire contract or provider capability was inferred. All
 possibly sent failures remain Pending; duplicate probes and final payout evidence
 acquisition remain separately gated work for stage 13 and later operator workflows.
+
+### Outbound reconciliation implementation
+
+The [outbound worker](outbound-reconcile.md) uses only concrete TransactionID
+lookups. It never treats a caller/proxy conversation ID as a transaction ID or
+enables STATUS-ID implicitly. Same-operation probing additionally requires an
+unexpired endpoint/command-specific sandbox/protocol evidence reference and a
+verified duplicate-retention age; no approval is configured by default. A literal
+duplicate error is Pending. Callback/query success remains an untrusted hint;
+independent exact-dispatch evidence with an actual receipt authorizes Paid,
+while definitive non-execution evidence is required for Failed. Manual deadlines
+produce a durable alert and Pending, preserving the pinned CDK proof-safety mapping.

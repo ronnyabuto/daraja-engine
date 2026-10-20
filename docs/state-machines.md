@@ -158,7 +158,7 @@ there is no unsafe generic state setter or provisional refund success here.
 | DISPATCHING / UNKNOWN_IN_FLIGHT / PENDING | Matching acknowledgment | PENDING | Pending |
 | DISPATCHING / UNKNOWN_IN_FLIGHT / PENDING | Duplicate rejection observation | PENDING | Pending |
 | UNKNOWN_IN_FLIGHT / PENDING | More transport ambiguity | Same state | Pending |
-| Any nonterminal | Manual deadline elapsed | MANUAL_RECONCILIATION_REQUIRED | Pending |
+| Any nonterminal | Automation exhausted, hard/manual deadline elapsed or no safe query/probe | MANUAL_RECONCILIATION_REQUIRED | Pending |
 | MANUAL_RECONCILIATION_REQUIRED | More ambiguity, duplicates or matching acknowledgment | Same state | Pending |
 | Any nonterminal, including manual | Independently verified, dispatch-bound paid evidence with receipt | PAID | Paid |
 | Any nonterminal, including manual | Independently verified, dispatch-bound definitive nonexecution | FAILED | Failed |
@@ -166,8 +166,9 @@ there is no unsafe generic state setter or provisional refund success here.
 
 There is no `Unpaid` projection for possibly dispatched payouts. The local CDK
 projection is a domain contract, not the service adapter (stage 18). Manual
-escalation never releases ecash proofs. No probe/resubmission method is enabled
-by this stage; DUP-B2C and DUP-B2B remain independent external gates.
+escalation never releases ecash proofs. [Outbound reconciliation](outbound-reconcile.md) implements a default-disabled,
+evidence-scoped same-operation probe; DUP-B2C and DUP-B2B remain independent
+external gates. Manual escalation atomically records a durable operator alert.
 
 ## Local acceptance and follow-through
 

@@ -50,6 +50,7 @@ impl From<serde_json::Error> for RepositoryError {
 }
 mod dispatch;
 mod exceptions;
+mod outbound_reconcile;
 mod valuation;
 pub use exceptions::{DepositPolicy, RefundAuthorization, RefundRequest};
 
@@ -766,7 +767,11 @@ impl Repository {
                 conversation,
             } => p.acknowledge(originator, conversation)?,
             PayoutChange::DuplicateObserved => p.duplicate_observed()?,
-            PayoutChange::Escalate => p.escalate(now)?,
+            PayoutChange::Escalate => {
+                p.escalate(now)?;
+                sqlx::query("INSERT INTO payout_alerts(payout_id,reason,created_at) VALUES(?,'MAX_PENDING_TTL',?) ON CONFLICT DO NOTHING")
+                    .bind(id.as_str()).bind(time(now)?).execute(&mut *tx).await?;
+            }
             PayoutChange::Resolve(evidence) => p.resolve(evidence)?,
         }
         changed(sqlx::query("UPDATE outbound_payouts SET state=?,provider_originator=?,provider_conversation=?,data=?,version=version+1 WHERE id=? AND version=?")

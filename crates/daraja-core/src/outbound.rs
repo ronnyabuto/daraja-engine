@@ -268,6 +268,12 @@ impl Payout {
         Ok(())
     }
 
+    pub(crate) fn require_manual(&mut self) -> Result<(), Error> {
+        self.nonterminal()?;
+        self.state = OutboundState::ManualReconciliationRequired;
+        Ok(())
+    }
+
     pub fn escalate(&mut self, now: Timestamp) -> Result<(), Error> {
         self.nonterminal()?;
         if now < self.manual_after {
@@ -431,3 +437,6 @@ impl crate::storage::Stored for Payout {
 
 mod dispatch;
 pub use dispatch::{DispatchConfig, DispatchError, MakePayment, OutboundPayments};
+
+mod reconcile;
+pub use reconcile::*;

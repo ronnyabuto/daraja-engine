@@ -37,7 +37,8 @@ callback URLs, amount and identity across restarts, certificate rotation or
 configuration reload. OAuth bearer tokens are obtained separately and are never
 stored in the business body. The endpoint is frozen with the dispatch; any future
 approved same-ID probe must use its original endpoint/body and separately enforce
-current endpoint/environment evidence gates. This stage exposes no probe API.
+current endpoint/environment evidence gates. The initial-dispatch API grants no probe permission; the
+[reconciler](outbound-reconcile.md) enforces that separate approval.
 
 ## Acknowledgment and callback races
 
@@ -61,7 +62,7 @@ releases a reservation or supplies definitive non-execution evidence.
 Both early and late matched QueueTimeOutURL observations put a Dispatching/Pending
 payout into UnknownInFlight; manual and terminal states do not regress. Duplicate
 callbacks preserve one inbox/link record. Results with success or failure codes
-remain observations for the later independent reconciliation boundary.
+remain observations for the independent reconciliation boundary.
 
 ## Recovery and limits
 
@@ -86,7 +87,8 @@ older data contains multiple quoted payouts for one quote; review such records
 without deleting financial history. No live provider guarantee is inferred from
 SQLite or mock tests.
 
-Stage 13 owns status reconciliation and any separately evidence-approved probe;
+[Outbound reconciliation](outbound-reconcile.md) now implements status polling,
+manual alerts and separately evidence-approved same-operation probing;
 stage 14 owns liquidity admission and stage 18 the CDK adapter. All external
 [capability gates](verification-gates.md) remain disabled. See
 `cargo test -p daraja-core --test collection outbound_dispatch --locked --offline`

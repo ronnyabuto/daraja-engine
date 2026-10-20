@@ -106,8 +106,10 @@ probe; a lease or local mock is no such authorization.
 
 See [SQLite integration tests](../crates/daraja-core/tests/sqlite.rs) for file-backed migration/upgrade, writer,
 receipt, rollback, event replay, reservation, lease fencing and abrupt-process
-recovery checks. Stage 03 adds persistence primitives; it does not implement the
-stage 12/13 payout workers, stage 14 liquidity admission or a public daemon API.
+recovery checks. Stage 03 adds persistence primitives; it does not itself implement payout workers, stage 14 liquidity admission or a
+public daemon API. Stages 12/13 now supply the
+[outbound dispatch](outbound-dispatch.md) and [reconciliation](outbound-reconcile.md)
+library services.
 Stage 09 now supplies [inbound workers and durable notification replay](inbound-reconcile.md).
 
 ## Stage 08 checkout transaction
@@ -166,3 +168,19 @@ job; replay never grants send permission. Acknowledgment IDs, outcome and early
 callback correlation share one transaction. Startup recovery marks abandoned
 DISPATCHING records unknown without I/O. Legacy duplicate quoted payouts cause
 migration to fail closed for review; unquoted legacy fixtures remain supported.
+
+## Stage 13 outbound reconciliation
+
+Migration 0008 adds `payout_reconcile_attempts` (generation, kind, gate reference,
+nullable transport outcome and start), `outbound_status_queries` (payout,
+TransactionID lookup and immutable acknowledgment IDs), and idempotent
+`payout_alerts`. A partial unique index permits one PROBE per payout. Existing
+`durable_jobs.poll_slot` counts attempts before I/O; generation/lease checks fence
+worker commits. The Paid-receipt unique index also applies to direct repository
+resolution; legacy conflicting allocations fail closed at migration.
+
+Manual state, alert and audit are atomic. Final evidence, reservation release,
+state, audit and worker completion are atomic. Missing/invalid evidence or a
+failed commit retains Pending and its reservation. Manual jobs remain available
+for independently verified late evidence, with automated probe/status work stopped.
+See [outbound reconciliation](outbound-reconcile.md) for clocks, gates and trust.

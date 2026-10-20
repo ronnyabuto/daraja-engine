@@ -211,6 +211,41 @@ impl<T: HttpTransport> PayoutClient<T> {
             proven_rejection_codes: BTreeMap::new(),
         })
     }
+    pub(crate) async fn probe_frozen(
+        &self,
+        payout: &crate::outbound::Payout,
+        endpoint: &str,
+        command: &str,
+        before_send: impl Future<Output = Result<()>> + Send,
+    ) -> Result<Outcome> {
+        let path = match command {
+            "BusinessPayment" => "/mpesa/b2c/v3/paymentrequest",
+            "BusinessBuyGoods" | "BusinessPayBill" => "/mpesa/b2b/v1/paymentrequest",
+            _ => return Err(disabled()),
+        };
+        if self.base.join(path).map_err(|_| disabled())?.as_str() != endpoint {
+            return Err(disabled());
+        }
+        let body = std::str::from_utf8(payout.dispatch().wire_body()).map_err(|_| input_error())?;
+        let value = crate::transport::strict_json(body).map_err(|_| input_error())?;
+        if value["OriginatorConversationID"].as_str()
+            != Some(payout.dispatch().operation_id().as_str())
+            || value["CommandID"].as_str() != Some(command)
+            || value["PartyA"].as_str() != Some(self.remitter.shortcode.as_str())
+        {
+            return Err(input_error());
+        }
+        let (value, outcome) = crate::transport::authorized_send_checked(
+            &self.app,
+            &self.transport,
+            &self.base,
+            path,
+            Secret::new(body),
+            before_send,
+        )
+        .await?;
+        Ok(acknowledgment(value, outcome)?.outcome)
+    }
     pub fn configure_capabilities(
         &mut self,
         capabilities: Capabilities,

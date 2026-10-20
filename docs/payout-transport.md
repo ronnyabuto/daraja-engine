@@ -133,3 +133,8 @@ Stage 12 supplies the concrete repository-backed hooks in
 `outbound::OutboundPayments`. `PreparedPayout::endpoint` freezes the actual target
 with the body before I/O. Transport classifications remain observations; the saga
 never derives terminal failure solely from an HTTP response or error code.
+
+Stage 13 adds the internal frozen-byte probe boundary and concrete status-query
+persistence under [outbound reconciliation](outbound-reconcile.md). Only the leased,
+evidence-approved worker authorizes a probe; ordinary MakePayment replay still
+never authorizes another send.

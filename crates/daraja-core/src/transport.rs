@@ -200,12 +200,32 @@ pub(crate) async fn authorized_send<App>(
     path: &str,
     body: Value,
 ) -> Result<(Value, Outcome)> {
+    authorized_send_checked(
+        app,
+        transport,
+        base,
+        path,
+        Secret::new(body.to_string()),
+        async { Ok(()) },
+    )
+    .await
+}
+
+pub(crate) async fn authorized_send_checked<App>(
+    app: &OAuthActor<App>,
+    transport: &impl HttpTransport,
+    base: &Url,
+    path: &str,
+    body: Secret,
+    before_send: impl Future<Output = Result<()>> + Send,
+) -> Result<(Value, Outcome)> {
     let mut attempt = app.authorize().await.map_err(auth_error)?;
     let header = attempt
         .token()
         .expect("new authorization attempt")
         .authorization()
         .map_err(auth_error)?;
+    before_send.await?;
     let result = send(transport, base, path, header, body).await;
     if result
         .as_ref()
@@ -222,7 +242,7 @@ async fn send(
     base: &Url,
     path: &str,
     authorization: HeaderValue,
-    body: Value,
+    body: Secret,
 ) -> Result<(Value, Outcome)> {
     let response = transport
         .post(HttpRequest {
@@ -230,7 +250,7 @@ async fn send(
                 .join(path)
                 .map_err(|_| ClientError::new(ErrorKind::Config))?,
             authorization,
-            body: Secret::new(body.to_string()),
+            body,
         })
         .await?;
     decode_response(response)

@@ -79,7 +79,7 @@ impl Repository {
     }
 }
 
-async fn load(tx: &mut Transaction<'_, Sqlite>, id: &Id) -> Result<Payout> {
+pub(super) async fn load(tx: &mut Transaction<'_, Sqlite>, id: &Id) -> Result<Payout> {
     let data: String = sqlx::query_scalar("SELECT data FROM outbound_payouts WHERE id=?")
         .bind(id.as_str())
         .fetch_optional(&mut **tx)
@@ -87,7 +87,7 @@ async fn load(tx: &mut Transaction<'_, Sqlite>, id: &Id) -> Result<Payout> {
         .ok_or(Error::NotFound)?;
     decode(&data)
 }
-async fn persist(tx: &mut Transaction<'_, Sqlite>, id: &Id, p: &Payout) -> Result<()> {
+pub(super) async fn persist(tx: &mut Transaction<'_, Sqlite>, id: &Id, p: &Payout) -> Result<()> {
     sqlx::query("UPDATE outbound_payouts SET state=?,provider_originator=?,provider_conversation=?,data=?,version=version+1 WHERE id=?")
         .bind(state(&p.state())?).bind(p.correlation().provider_originator.as_ref().map(Id::as_str))
         .bind(p.correlation().provider_conversation.as_ref().map(Id::as_str)).bind(encode(p)?)
