@@ -1,0 +1,19 @@
+# Documentation template only; configuration parsing is introduced later.
+# Operators supply their own credentials locally. Never commit populated copies.
+[collection]
+consumer_key = "REPLACE_LOCALLY"
+consumer_secret = "REPLACE_LOCALLY"
+shortcode = "REPLACE_LOCALLY"
+passkey = "REPLACE_LOCALLY"
+
+[disbursement]
+consumer_key = "REPLACE_LOCALLY"
+consumer_secret = "REPLACE_LOCALLY"
+initiator_name = "REPLACE_LOCALLY"
+initiator_password = "REPLACE_LOCALLY"
+
+[capabilities]
+live_payments = false
+b2c_duplicate_probe = false
+b2b_duplicate_probe = false
+linked_account_sweep = false

@@ -5,3 +5,16 @@
 *.db
 *.db-shm
 *.db-wal
+
+**/target/
+/config.toml
+/config.local.toml
+/secrets/
+/credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

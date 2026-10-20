@@ -1,0 +1,27 @@
+[workspace]
+members = ["crates/daraja-core", "crates/cdk-daraja-processor", "crates/daraja-daemon"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ronnyabuto/daraja-engine"
+
+[workspace.dependencies]
+daraja-core = { path = "crates/daraja-core" }
+axum = "=0.8.9"
+tokio = { version = "=1.48.0", features = ["macros", "rt-multi-thread"] }
+tonic = "=0.14.2"
+tonic-prost = "=0.14.2"
+tonic-prost-build = "=0.14.2"
+prost = "=0.14.1"
+prost-build = "=0.14.1"
+prost-types = "=0.14.1"
+protoc-bin-vendored = "=3.2.0"
+sha2 = "=0.10.9"
+sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

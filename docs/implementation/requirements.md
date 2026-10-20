@@ -6,9 +6,9 @@ All statuses start NOT_STARTED. Statuses: NOT_STARTED, IN_PROGRESS, DONE (implem
 
 | ID | PRD section | Required behavior | Stages | Status | Implementation / test / evidence |
 |---|---|---|---|---|---|
-| R01 | 1, 5.1 | Single Rust 2024 workspace; core library, processor library/binary, sidecar binary | 00 | NOT_STARTED | — |
-| R02 | 1, 2.1 | Dual MIT/Apache-2.0 licensing and self-hosted credential ownership | 00,26 | NOT_STARTED | — |
-| R03 | 4, 5.1, 7 Phase 0 | Exact pinned CDK service/protobuf and all seven methods | 00,01,17,18 | NOT_STARTED | — |
+| R01 | 1, 5.1 | Single Rust 2024 workspace; core library, processor library/binary, sidecar binary | 00 | DONE | Root Cargo.toml; crates/{daraja-core,cdk-daraja-processor,daraja-daemon}/Cargo.toml and src; evidence/00-workspace.md: workspace build, fmt, tests, clippy |
+| R02 | 1, 2.1 | Dual MIT/Apache-2.0 licensing and self-hosted credential ownership | 00,26 | IN_PROGRESS | Stage 00: LICENSE-MIT, LICENSE-APACHE; config.example.toml; .gitignore; scripts/check-foundation.py; evidence/00-workspace.md. Operator packaging remains stage 26. |
+| R03 | 4, 5.1, 7 Phase 0 | Exact pinned CDK service/protobuf and all seven methods | 00,01,17,18 | IN_PROGRESS | Stage 00: docs/protocol-contract.md; vendored proto and upstream licenses; processor build.rs and tests/wire_contract.rs; evidence/00-workspace.md. Exact upstream WaitPaymentEvent differs from PRD; stage 01 decision and stages 17/18 implementation remain. |
 | R04 | 4, 7 Phase 0 | NUT-04/NUT-05 custom mpesa and KES/sat compatibility evidence | 01,19 | NOT_STARTED | — |
 | R05 | 1, 5.3 | Real CDK proof lock semantics across Pending, errors and recovery | 01,18,19 | NOT_STARTED | — |
 | R06 | 5.3, 7 Phase 0 | Independent B2C/B2B idempotency guarantees and gated probing | 01,13,27 | NOT_STARTED | — |
