@@ -263,3 +263,11 @@ Stage 11 supplies the [tariff/FX library](tariffs-fx.md), including conservative
 whole-KES/sat `total_spent` mapping. CDK unit advertisement requires explicit
 deployed-mint verification and a valid oracle for sat; defaults advertise no units.
 No live rate or deployed CDK support is fabricated.
+
+## Stage 12 dispatch boundary
+
+[Durable outbound dispatch](outbound-dispatch.md) adds concrete one-send claims,
+frozen endpoint/body/credentials, transactional acknowledgment IDs and staged
+callback correlation. No wire contract or provider capability was inferred. All
+possibly sent failures remain Pending; duplicate probes and final payout evidence
+acquisition remain separately gated work for stage 13 and later operator workflows.

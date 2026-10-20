@@ -230,3 +230,13 @@ fee audit decisions are immutable; new quoted dispatches validate expiry before
 admission. Existing pending dispatches retain their terms after expiry.
 Actual-fee evidence cannot refresh rates; excess fees remain audit exceptions.
 See [tariffs and FX](tariffs-fx.md) for exact rounding and CDK unit mapping.
+
+## Stage 12 dispatch orchestration
+
+[OutboundPayments](outbound-dispatch.md) now commits and claims the immutable
+quoted operation before one transport submission. Same-key payload replay returns
+the original operation; quote uniqueness prevents another key spending it again.
+QueueTimeOutURL can move acknowledged Pending to UnknownInFlight. Both project
+to CDK Pending; terminal evidence and manual states are preserved. Recovery of
+DISPATCHING never grants another send. Early callbacks remain untrusted inbox
+observations and are correlated with acknowledgment IDs transactionally.

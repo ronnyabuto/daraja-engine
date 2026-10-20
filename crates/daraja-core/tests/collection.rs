@@ -839,3 +839,6 @@ async fn injected_transport_preserves_sensitive_headers_and_enforces_body_limit(
 
 #[path = "support/payout.rs"]
 mod payout_contract;
+
+#[path = "support/outbound_dispatch.rs"]
+mod outbound_dispatch;

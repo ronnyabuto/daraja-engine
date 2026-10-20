@@ -230,17 +230,30 @@ impl Payout {
         provider_conversation: Id,
     ) -> Result<(), Error> {
         self.nonterminal()?;
+        self.record_acknowledgment(provider_originator, provider_conversation)
+    }
+
+    pub(crate) fn record_acknowledgment(
+        &mut self,
+        provider_originator: Id,
+        provider_conversation: Id,
+    ) -> Result<(), Error> {
         self.correlation
             .acknowledge(provider_originator, provider_conversation)?;
+        if matches!(self.state, OutboundState::Paid | OutboundState::Failed) {
+            return Ok(());
+        }
         if self.state != OutboundState::ManualReconciliationRequired {
             self.state = OutboundState::Pending;
         }
         Ok(())
     }
 
-    pub fn ambiguous(&mut self, _reason: Ambiguity) -> Result<(), Error> {
+    pub fn ambiguous(&mut self, reason: Ambiguity) -> Result<(), Error> {
         self.nonterminal()?;
-        if self.state == OutboundState::Dispatching {
+        if self.state == OutboundState::Dispatching
+            || (reason == Ambiguity::QueueTimeout && self.state == OutboundState::Pending)
+        {
             self.state = OutboundState::UnknownInFlight;
         }
         Ok(())
@@ -415,3 +428,6 @@ impl crate::storage::Stored for Payout {
         StoredPayout::deserialize(d)
     }
 }
+
+mod dispatch;
+pub use dispatch::{DispatchConfig, DispatchError, MakePayment, OutboundPayments};

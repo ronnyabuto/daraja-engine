@@ -79,7 +79,7 @@ There is no no-op production persistence implementation. `PayoutPersistence` mus
 1. Commit caller ID, command, exact `PreparedPayout::wire_body`, callback binding and
    unresolved recovery work before returning from `prepare`. Reject conflicting
    or already-dispatched identity; do not authorize replay merely because bytes
-   match. The saga (stage 12) owns reservation, operation identity and idempotency.
+   match. The [stage 12 saga](outbound-dispatch.md) owns reservation, operation identity and idempotency.
 2. Atomically bind the acknowledgment's caller, provider originator and conversation
    IDs without replacing an early callback or conflicting existing ID. Proxy IDs
    may differ from the caller ID. Optional synchronous TransactionID, request ID,
@@ -128,3 +128,8 @@ duplicate code, real request/body deadlines, 401 and 500/503 with one dispatch o
 B2B serialization contains no customer phone field; TRACE omits customer phone,
 private references, initiator, credentials and full callback URLs. Fixtures are
 synthetic and prove no live provider behavior or combined mint integration.
+
+Stage 12 supplies the concrete repository-backed hooks in
+`outbound::OutboundPayments`. `PreparedPayout::endpoint` freezes the actual target
+with the body before I/O. Transport classifications remain observations; the saga
+never derives terminal failure solely from an HTTP response or error code.

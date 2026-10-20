@@ -140,6 +140,7 @@ impl Command {
 }
 #[derive(Debug)]
 pub struct PreparedPayout {
+    pub endpoint: Url,
     pub caller_originator_conversation_id: Id,
     pub command: Command,
     pub wire_body: Secret,
@@ -349,6 +350,12 @@ impl<T: HttpTransport> PayoutClient<T> {
             .build(request, sweep)
             .map_err(|e| failure(e, Disposition::NotDispatched))?;
         let prepared = PreparedPayout {
+            endpoint: self.base.join(command.path()).map_err(|_| {
+                failure(
+                    ClientError::new(ErrorKind::Config),
+                    Disposition::NotDispatched,
+                )
+            })?,
             caller_originator_conversation_id: request.caller_originator_conversation_id.clone(),
             command,
             wire_body: Secret::new(body.to_string()),

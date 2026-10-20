@@ -29,7 +29,7 @@ pub enum ErrorKind {
     Persistence,
     CapabilityDisabled,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(serde::Serialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Outcome {
     pub http_status: Option<u16>,
     pub request_id: Option<Id>,

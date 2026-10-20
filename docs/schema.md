@@ -1,7 +1,7 @@
 # SQLite repository
 
 Owner: `daraja-core::repository::Repository`; domain rules remain in `inbound`,
-`outbound`, `amount` and `identity`. Six ordered, embedded SQLx migrations live in
+`outbound`, `amount` and `identity`. Seven ordered, embedded SQLx migrations live in
 `crates/daraja-core/migrations`. SQLx records/checks their versions and checksums;
 `build.rs` watches the directory. Never edit an applied migration: add a new one.
 Opening a database applies missing migrations and rejects checksum mismatch.
@@ -154,3 +154,15 @@ established actual fee plus conservative internal total spent. A NULL actual fee
 means consume the full reserve. An excess fee is retained with NULL total spent
 and raises SettlementHeld. Replays cannot change the audit decision. Update/delete
 triggers protect both new tables. No existing migration was edited.
+
+## Stage 12 dispatch admission and observations
+
+Migration 0007 and [outbound dispatch](outbound-dispatch.md) add one payout per
+frozen quote, immutable `payout_dispatches` (quote, command, original endpoint),
+`payout_dispatch_observations` (transport classification/outcome/time) and
+`payout_callback_links` (untrusted inbox candidates by rail and IDs). The claim
+transaction includes the existing binding, reservation, audit and reconciliation
+job; replay never grants send permission. Acknowledgment IDs, outcome and early
+callback correlation share one transaction. Startup recovery marks abandoned
+DISPATCHING records unknown without I/O. Legacy duplicate quoted payouts cause
+migration to fail closed for review; unquoted legacy fixtures remain supported.

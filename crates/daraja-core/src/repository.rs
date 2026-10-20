@@ -48,6 +48,7 @@ impl From<serde_json::Error> for RepositoryError {
         Self::Encoding
     }
 }
+mod dispatch;
 mod exceptions;
 mod valuation;
 pub use exceptions::{DepositPolicy, RefundAuthorization, RefundRequest};
@@ -213,6 +214,15 @@ impl Repository {
             .execute(&mut *tx).await?;
         sqlx::query("INSERT INTO callback_jobs(observation_id,due_at) VALUES(?,?) ON CONFLICT(observation_id) DO NOTHING")
             .bind(&id).bind(time(now)?).execute(&mut *tx).await?;
+        if matches!(
+            endpoint,
+            "/callbacks/b2c/{secret}"
+                | "/callbacks/b2b/{secret}"
+                | "/callbacks/b2c/timeout/{secret}"
+                | "/callbacks/b2b/timeout/{secret}"
+        ) {
+            dispatch::link_callbacks(&mut tx, now, None, Some(&id)).await?;
+        }
         if matches!(
             endpoint,
             "/callbacks/stk/{secret}" | "/callbacks/c2b/confirmation/{secret}"
@@ -635,9 +645,18 @@ impl Repository {
         Ok(event)
     }
     /// Returns the original durable operation for an identical request replay.
+    /// A replay returns no send authority. The saga uses a separate insertion claim.
     /// Successful return is the commit-before-I/O crash boundary. Recovery only
     /// schedules reconciliation, never automatic resubmission.
     pub async fn prepare_payout(&self, key: &RequestKey, payout: &Payout) -> Result<Id> {
+        Ok(self.prepare_payout_claim(key, payout, None).await?.0)
+    }
+    pub(crate) async fn prepare_payout_claim(
+        &self,
+        key: &RequestKey,
+        payout: &Payout,
+        quoted_endpoint: Option<&str>,
+    ) -> Result<(Id, bool)> {
         let d = payout.dispatch();
         if key.operation != d.payload().operation {
             return Err(Error::EvidenceMismatch.into());
@@ -646,7 +665,13 @@ impl Repository {
         if let Some(row) = sqlx::query("SELECT payload_hash,operation_id FROM request_bindings WHERE caller=? AND operation=? AND request_key=?")
             .bind(key.caller.as_str()).bind(key.operation.as_str()).bind(key.key.as_str()).fetch_optional(&mut *tx).await? {
             if row.try_get::<Vec<u8>,_>("payload_hash")? != d.hash().as_bytes() { return Err(Error::IdempotencyConflict.into()); }
-            return Ok(Id::new(row.try_get::<String,_>("operation_id")?)?);
+            let id = Id::new(row.try_get::<String,_>("operation_id")?)?;
+            let data: String = sqlx::query_scalar("SELECT data FROM outbound_payouts WHERE id=?")
+                .bind(id.as_str()).fetch_one(&mut *tx).await?;
+            if decode::<Payout>(&data)?.dispatch().payload() != d.payload() {
+                return Err(Error::IdempotencyConflict.into());
+            }
+            return Ok((id, false));
         }
         // Revalidate deserialized values before admitting a new dispatch.
         let mut validated = crate::outbound::DispatchRecord::new(
@@ -680,6 +705,20 @@ impl Repository {
         }
         sqlx::query("INSERT INTO outbound_payouts(id,caller_request,state,payload_hash,dispatch,wire_body,next_check_at,manual_after,data) VALUES(?,?,?,?,?,?,?,?,?)")
             .bind(d.operation_id().as_str()).bind(payout.correlation().caller_request.as_str()).bind(state(&payout.state())?).bind(d.hash().as_bytes().as_slice()).bind(encode(d)?).bind(d.wire_body()).bind(time(payout.next_check_at())?).bind(time(payout.manual_after())?).bind(encode(payout)?).execute(&mut *tx).await?;
+        if let Some(endpoint) = quoted_endpoint {
+            let quote = d.quote().ok_or(Error::EvidenceMismatch)?;
+            sqlx::query("INSERT INTO payout_dispatches(payout_id,quote_id,command,endpoint) VALUES(?,?,?,?)")
+                .bind(d.operation_id().as_str())
+                .bind(quote.id().as_str())
+                .bind(
+                    serde_json::from_slice::<serde_json::Value>(d.wire_body())?["CommandID"]
+                        .as_str()
+                        .ok_or(Error::EvidenceMismatch)?,
+                )
+                .bind(endpoint)
+                .execute(&mut *tx)
+                .await?;
+        }
         bind_request(&mut tx, key, d.payload(), d.operation_id()).await?;
         sqlx::query(
             "INSERT INTO balance_reservations(payout_id,amount,unit) VALUES(?,?,'KesMinor')",
@@ -704,7 +743,7 @@ impl Repository {
         )
         .await?;
         tx.commit().await?;
-        Ok(d.operation_id().clone())
+        Ok((d.operation_id().clone(), true))
     }
     pub async fn change_payout(
         &self,
