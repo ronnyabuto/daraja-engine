@@ -1,19 +1,30 @@
 # daraja-engine
 
-Implementation workspace prepared from **PRD & Technical Specification v1.0: daraja-core & cdk-daraja-processor**.
+Self-hosted Rust components for integrating Safaricom Daraja with a Cashu mint
+through the CDK payment processor protocol.
 
-The three project folders follow the specification's single Cargo workspace:
+The repository contains one Cargo workspace:
 
-- [daraja-core](crates/daraja-core): Rust reconciliation library.
-- [cdk-daraja-processor](crates/cdk-daraja-processor): CDK gRPC payment processor.
-- [daraja-daemon](crates/daraja-daemon): language-agnostic REST/gRPC sidecar.
+- [daraja-core](crates/daraja-core): financial domain types, SQLite persistence,
+  OAuth and cryptography, and collection/query HTTP clients.
+- [cdk-daraja-processor](crates/cdk-daraja-processor): pinned CDK protobuf types
+  and a processor library/binary under development.
+- [daraja-daemon](crates/daraja-daemon): planned REST/gRPC sidecar.
 
-**Status: stages 00–01 build foundation and local protocol verification; no payment engine or service is implemented yet.** One Cargo workspace keeps the core, processor and daemon on the same state/protocol contracts. Both binaries exit unsuccessfully with an explicit diagnostic until their service stages are implemented.
+**Work in progress.** Stages 00–05 are locally verified. Reconciliation workers,
+payout transports, callback ingress and runnable services remain unimplemented.
+Both binaries exit unsuccessfully with an explicit diagnostic. No live provider
+or combined mint integration has been verified; all external capabilities default
+to disabled. See the [roadmap](docs/roadmap.md) for the remaining work.
 
-Start with [the sequential implementation guide](docs/implementation/README.md). The original [PDF](docs/spec/prd-v1.0.pdf) and [extracted text](docs/spec/prd-v1.0.txt) are retained locally.
+## Documentation
 
-
-GitHub repository: [ronnyabuto/daraja-engine](https://github.com/ronnyabuto/daraja-engine).
+- [Financial state machines](docs/state-machines.md)
+- [SQLite schema and recovery contracts](docs/schema.md)
+- [Credential and cryptography contracts](docs/auth-crypto.md)
+- [Collection and query transport](docs/collection-transport.md)
+- [Pinned protocol and provider findings](docs/protocol-contract.md)
+- [Verification gates](docs/verification-gates.md)
 
 ## Build locally
 
@@ -53,4 +64,5 @@ ignored. Do not put credentials in Cargo manifests, source or documentation.
 
 Original workspace code is licensed under either [MIT](LICENSE-MIT) or
 [Apache-2.0](LICENSE-APACHE), at your option. Vendored CDK notices accompany the
-schema. The original specification and planning documents remain preserved.
+schema. Internal implementation prompts, session handoffs and source specification files
+are maintained locally and excluded from the distributed source tree.

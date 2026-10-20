@@ -1,8 +1,8 @@
 # Financial domain contracts (stage 02)
 
-Owners: `daraja-core::{amount,identity,inbound,outbound}`. PRD §§4–5.3 was
-compared with a fresh `pdftotext -layout` extraction of the authoritative PDF;
-the extraction is byte-identical to `docs/spec/prd-v1.0.txt`.
+Owners: `daraja-core::{amount,identity,inbound,outbound}`. These contracts were
+checked against the source specification; internal PRD inputs are maintained
+locally and are not distributed with the source tree.
 [Pinned protocol findings](protocol-contract.md) override unsupported provider
 claims: no callback alone settles, no duplicate error proves payment, and no
 timer proves nonexecution. Stage 01 local acceptance is DONE. All external
@@ -10,7 +10,7 @@ timer proves nonexecution. Stage 01 local acceptance is DONE. All external
 
 Stage 03 now implements the persistence follow-through described below; see
 [schema and recovery contracts](schema.md) and
-[local SQLite evidence](implementation/evidence/03-sqlite.md). References below to
+[SQLite boundary tests](../crates/daraja-core/tests/sqlite.rs). References below to
 future stage 03 work describe the original stage 02 handoff.
 
 ## Boundary and evidence
@@ -182,4 +182,4 @@ proves the aggregate contract under a mutex, not SQL isolation or durability.
 Stage 03 must reproduce the invariants on file-backed SQLite with rollback,
 competing writers and reopen/crash tests. Stages 09/13/15 provide trusted evidence
 acquisition and operator resolution; stages 17–19 verify actual CDK behavior.
-See [stage evidence](implementation/evidence/02-domain.md) for actual results.
+Run `cargo test -p daraja-core --test domain --locked` to reproduce the domain checks.

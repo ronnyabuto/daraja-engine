@@ -1,6 +1,9 @@
 # cdk-daraja-processor
 
-Rust library/binary: implements the pinned CDK gRPC processor using daraja-core.
+Planned Rust library/binary implementing the pinned CDK gRPC processor using
+daraja-core. Generated wire types and local protocol tests are implemented; the
+financial service adapter remains under development.
 
-Stage 00 provides a buildable crate. Financial and service behavior is not implemented. Follow [the workspace sequence](../../docs/implementation/README.md) from prompt 01. This crate is part of one parent Cargo workspace; do not initialize a nested repository.
-
+The binary currently exits unsuccessfully with an explicit diagnostic. See the
+[roadmap](../../docs/roadmap.md). This crate belongs to the parent Cargo workspace;
+do not initialize a nested repository.

@@ -1,8 +1,20 @@
-use axum::{Router, http::StatusCode, routing::get};
+use axum::{
+    Router,
+    http::StatusCode,
+    routing::{get, post},
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use daraja_core::{
+    amount::{Amount, Unit},
     auth::{AuthError, CollectionApp, OAuthConfig},
+    collection::{
+        C2bRegistration, C2bResponsePolicy, CollectionClient, StatusAcknowledgment,
+        StatusCredentials, StatusIdentifierType, StatusLookup, StatusPersistence, StatusPrepared,
+        StatusRequest, StkConfig, StkSubmission, StkTransactionType, TransactionStatusClient,
+    },
     crypto::{Clock, Environment, Secret, SecurityCredentialKey, stk_password},
+    identity::Id,
+    transport::{ReqwestTransport, Result as TransportResult},
 };
 use std::{
     io::Write,
@@ -47,7 +59,15 @@ async fn debug_errors_and_trace_output_omit_secrets_at_http_and_crypto_boundarie
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
+    let provider_error = || async {
+        axum::Json(
+            serde_json::json!({"errorCode":"400.001", "errorMessage":"synthetic-provider-error-secret"}),
+        )
+    };
     let app = Router::new()
+        .route("/mpesa/stkpush/v1/processrequest", post(provider_error))
+        .route("/mpesa/c2b/v1/registerurl", post(provider_error))
+        .route("/mpesa/transactionstatus/v1/query", post(provider_error))
         .route("/ok", get(|| async { axum::Json(serde_json::json!({"access_token":"synthetic-bearer-redaction-marker", "expires_in":3600})) }))
         .route("/bad", get(|| async { (StatusCode::UNAUTHORIZED, "synthetic-provider-error-secret") }));
     let server = tokio::spawn(async move {
@@ -83,6 +103,74 @@ async fn debug_errors_and_trace_output_omit_secrets_at_http_and_crypto_boundarie
         )
         .unwrap_err();
     tracing::debug!(?passkey, ?password, ?stk, ?key, ?encrypted, ?crypto_error, message = %crypto_error);
+    let transport = || {
+        ReqwestTransport::new(
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(2),
+        )
+        .unwrap()
+    };
+    let collection = CollectionClient::new(
+        transport(),
+        url.parse().unwrap(),
+        actor.clone(),
+        FixedClock,
+        StkConfig {
+            shortcode: Id::new("174379").unwrap(),
+            passkey: passkey.clone(),
+        },
+    )
+    .unwrap();
+    let request = StkSubmission {
+        amount: Amount::new(100, Unit::KesMinor),
+        phone: Secret::new("254799888777"),
+        callback_url: Secret::new(
+            "https://example.invalid/callback-secret-marker?secret=query-secret-marker",
+        ),
+        account_reference: Id::new("ABCD1234").unwrap(),
+        description: Secret::new("description-secret-marker"),
+        transaction_type: StkTransactionType::CustomerPayBillOnline,
+    };
+    let error = collection.submit_stk(&request).await.unwrap_err();
+    tracing::debug!(?request, ?error);
+    let registration = C2bRegistration {
+        shortcode: Id::new("600000").unwrap(),
+        confirmation_url: Secret::new("https://example.invalid/confirmation-secret-marker"),
+        validation_url: Secret::new("https://example.invalid/validation-secret-marker"),
+        response_policy: C2bResponsePolicy::Cancelled,
+    };
+    let error = collection.register_c2b(&registration).await.unwrap_err();
+    tracing::debug!(?registration, ?error);
+    struct Hooks;
+    impl StatusPersistence for Hooks {
+        async fn prepare(&self, _: StatusPrepared<'_>) -> TransportResult<()> {
+            Ok(())
+        }
+        async fn acknowledge(&self, _: &Id, _: &StatusAcknowledgment) -> TransportResult<()> {
+            Ok(())
+        }
+    }
+    let status = TransactionStatusClient::new(
+        transport(),
+        url.parse().unwrap(),
+        StatusCredentials::Collection(actor.clone()),
+        FixedClock,
+    )
+    .unwrap();
+    let request = StatusRequest {
+        local_query_id: Id::new("local-query").unwrap(),
+        lookup: StatusLookup::Receipt(Id::new("ABC1234567").unwrap()),
+        initiator: password.clone(),
+        security_credential: encrypted.clone(),
+        party_a: Id::new("600000").unwrap(),
+        identifier_type: StatusIdentifierType::Shortcode,
+        result_url: Secret::new("https://example.invalid/result-secret-marker"),
+        timeout_url: Secret::new("https://example.invalid/timeout-secret-marker"),
+        remarks: Secret::new("remarks-secret-marker"),
+        occasion: Secret::new("occasion-secret-marker"),
+    };
+    let error = status.request(&request, &Hooks).await.unwrap_err();
+    tracing::debug!(?request, ?error);
     actor.cancel();
     bad.cancel();
     server.abort();
@@ -90,6 +178,16 @@ async fn debug_errors_and_trace_output_omit_secrets_at_http_and_crypto_boundarie
     let output = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
     assert!(output.contains("REDACTED"));
     for secret in [
+        "callback-secret-marker",
+        "query-secret-marker",
+        "description-secret-marker",
+        "254799888777",
+        "confirmation-secret-marker",
+        "validation-secret-marker",
+        "result-secret-marker",
+        "timeout-secret-marker",
+        "remarks-secret-marker",
+        "occasion-secret-marker",
         "synthetic-consumer-key-marker",
         "synthetic-consumer-secret-marker",
         "synthetic-bearer-redaction-marker",

@@ -112,7 +112,7 @@ release evidence. Mocks and source inspection cannot pass these tasks.
 ## Local reproduction
 
 ```sh
-cargo +stable test --workspace --locked --offline
+cargo test --workspace --locked --offline
 python3 scripts/test-protocol-gates.py
 python3 scripts/check-foundation.py
 # Real upstream tests; obtain the exact source pin first, outside this repo:
@@ -123,5 +123,5 @@ python3 scripts/check-cdk-upstream.py --source /tmp/daraja-cdk-v0.18.2 --protoc 
 The runner verifies exact CDK HEAD and unchanged tracked source/lockfile, uses
 upstream Cargo.lock and limits build jobs. `--offline` works only after required
 dependencies are cached. It executes upstream unit/proof-state tests, not a
-Daraja provider simulation or full cdk-mintd deployment. Actual results and
-limitations belong in [stage 01 evidence](implementation/evidence/01-protocol-gates.md).
+Daraja provider simulation or full cdk-mintd deployment. Retain each run's results and limitations in local operator evidence; a local pass
+does not enable an external capability.

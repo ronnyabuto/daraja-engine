@@ -1,6 +1,6 @@
 # Daraja workspace instructions
 
-The requested deliverable at setup time is project folders and sequential implementation prompts. Source code has not yet been implemented. Use docs/implementation/README.md to begin.
+This is one Rust workspace. Read README.md and the relevant protocol, state and schema contracts before editing. Public progress is recorded in docs/roadmap.md. Internal sequential prompts and handoffs may be present in the ignored docs/implementation directory; when assigned a numbered stage, follow those local instructions.
 
 ## Contributor workflow
 
@@ -9,7 +9,7 @@ The requested deliverable at setup time is project folders and sequential implem
 - Use current-docs for uncertain version-sensitive integrations and system-reasoning for architectural tradeoffs or unclear cross-component failures.
 - Do not delegate unless the user or applicable skill explicitly requests it.
 - Implement one numbered prompt at a time. Preserve meaningful tests and verify the affected boundary with representative failure/recovery outcomes.
-- Maintain docs/implementation/STATUS.md and requirements.md plus concise reproducible evidence. Context compaction is not completion.
+- For numbered implementation work, maintain local docs/implementation/STATUS.md and requirements.md plus concise reproducible evidence. Keep those files and the source PRD local; do not force-add ignored planning material. Update public technical contracts when behavior changes. Context compaction is not completion.
 - Remove redundant scaffolding/comments and follow local naming. Stop when requested behavior and relevant checks pass.
 
 ## Financial invariants

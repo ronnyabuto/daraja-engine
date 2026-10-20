@@ -1,6 +1,8 @@
 # daraja-daemon
 
-Rust binary: exposes daraja-core over daemon REST/OpenAPI and gRPC.
+Planned Rust binary exposing daraja-core over REST/OpenAPI and gRPC.
+The crate builds, but listeners and service behavior remain under development.
 
-Stage 00 provides a buildable crate. Financial and service behavior is not implemented. Follow [the workspace sequence](../../docs/implementation/README.md) from prompt 01. This crate is part of one parent Cargo workspace; do not initialize a nested repository.
-
+The binary currently exits unsuccessfully with an explicit diagnostic. See the
+[roadmap](../../docs/roadmap.md). This crate belongs to the parent Cargo workspace;
+do not initialize a nested repository.

@@ -100,8 +100,7 @@ probe; a lease or local mock is no such authorization.
 
 ## Local evidence
 
-See [03-sqlite.md](implementation/evidence/03-sqlite.md) and
-`crates/daraja-core/tests/sqlite.rs` for file-backed migration/upgrade, writer,
+See [SQLite integration tests](../crates/daraja-core/tests/sqlite.rs) for file-backed migration/upgrade, writer,
 receipt, rollback, event replay, reservation, lease fencing and abrupt-process
 recovery checks. Stage 03 adds persistence primitives; it does not implement the
 stage 09/12/13 provider workers, stage 14 liquidity admission or a public daemon API.

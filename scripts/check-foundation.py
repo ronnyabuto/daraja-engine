@@ -16,6 +16,8 @@ paths = subprocess.check_output(
 for name in filter(None, paths):
     path = pathlib.PurePosixPath(name)
     assert not any(part in {"secrets", "credentials", "target"} for part in path.parts), name
+    assert not any(part in {".codex", ".agents", ".aws", ".idea", ".vscode", "__pycache__"} for part in path.parts), name
+    assert path.parts[:2] not in {("docs", "implementation"), ("docs", "spec")}, name
     assert path.suffix not in {".pem", ".key", ".p12", ".pfx", ".db", ".sqlite"}, name
     assert not (path.name.startswith(".env") and path.name != ".env.example"), name
     assert path.name not in {"config.toml", "config.local.toml"}, name

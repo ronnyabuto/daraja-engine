@@ -5,7 +5,7 @@ Each constructor creates its own credentials, HTTP client, cache, refresh mutex,
 background timer and cancellation token. Clones share only that actor. Operators
 must configure distinct provider apps with the appropriate permissions; types do
 not establish provider permissions or prevent an operator supplying the same keys.
-There are no provider transport callers yet; stages 05/06 consume these contracts.
+Stage 05 collection/status transports consume these contracts; stage 06 adds payout transports. See docs/collection-transport.md for routing and the no-replay 401 boundary.
 
 Construct inside a Tokio runtime. OAuth endpoints must use HTTPS, except numeric
 loopback HTTP for local fixtures. User info, query strings and fragments are
@@ -76,7 +76,7 @@ Provider access and live acceptance remain separate disabled capability gates.
 
 Sources checked 2026-10-20:
 
-- Authoritative PRD PDF, sections 4, 5.1 and phase 1; extracted text agrees with `docs/spec/prd-v1.0.txt` on these contracts.
+- Source specification, sections 4, 5.1 and phase 1, checked against the locally maintained original PDF.
 - [Safaricom Authorization](https://developer.safaricom.co.ke/apis/Authorization): Basic authentication, grant type, one-hour description and `expires_in` metadata. It also warns a newly generated token invalidates the previous token.
 - [Safaricom Getting Started](https://developer.safaricom.co.ke/apis/GettingStarted) and [Transaction Status](https://developer.safaricom.co.ke/apis/TransactionStatus): the explicit algorithm encrypts unencrypted password bytes with RSA PKCS#1 v1.5, then Base64 encodes ciphertext. A prose reference to a base64-encoded input in Getting Started is inconsistent with its numbered algorithm; implementation follows the algorithm and Transaction Status instructions.
 - [Safaricom FAQ](https://developer.safaricom.co.ke/faqs): separate sandbox/production certificate downloads.

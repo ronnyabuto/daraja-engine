@@ -2,12 +2,14 @@
 
 pub mod amount;
 pub mod auth;
+pub mod collection;
 pub mod crypto;
 pub mod identity;
 pub mod inbound;
 pub mod outbound;
 pub mod repository;
 mod storage;
+pub mod transport;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {

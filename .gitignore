@@ -19,3 +19,14 @@
 *.sqlite-shm
 *.sqlite-wal
 __pycache__/
+
+# Local planning inputs and agent/session state are not distributed.
+/docs/implementation/
+/docs/spec/
+/.codex/
+/.agents/
+/.aws/
+/.idea/
+/.vscode/
+.DS_Store
+*.log
