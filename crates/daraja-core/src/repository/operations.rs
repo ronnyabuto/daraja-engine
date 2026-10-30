@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     inbound::EvidenceSource,
-    operations::{PayoutView, ResolvePayout},
+    operations::{AlertClaim, PayoutView, QueueEntry, QueueKind, ResolvePayout},
     outbound::FinalOutcome,
 };
 use sha2::{Digest, Sha256};
@@ -18,6 +18,148 @@ fn view(p: &Payout, version: i64) -> PayoutView {
 }
 
 impl Repository {
+    pub(crate) async fn operator_queue(
+        &self,
+        kind: QueueKind,
+        after: i64,
+        limit: u32,
+    ) -> Result<Vec<QueueEntry>> {
+        if after < 0 || limit == 0 || limit > 100 {
+            return Err(Error::InvalidAmount.into());
+        }
+        let sql = match kind {
+            QueueKind::PendingPayouts => {
+                "SELECT rowid AS cursor,id AS subject,data FROM outbound_payouts WHERE rowid>? AND state NOT IN ('Paid','Failed') ORDER BY rowid LIMIT ?"
+            }
+            QueueKind::ExceptionDeposits => {
+                "SELECT r.rowid AS cursor,r.receipt AS subject,r.data FROM mpesa_receipts_ledger r JOIN unreconciled_deposits u ON u.receipt=r.receipt WHERE r.rowid>? AND u.resolved_at IS NULL ORDER BY r.rowid LIMIT ?"
+            }
+        };
+        sqlx::query(sql)
+            .bind(after)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| {
+                let data: String = row.try_get("data")?;
+                let (state, amount) = match kind {
+                    QueueKind::PendingPayouts => {
+                        let p: Payout = decode(&data)?;
+                        (state(&p.state())?, p.dispatch().payload().amount)
+                    }
+                    QueueKind::ExceptionDeposits => {
+                        let r: ConfirmedReceipt = decode(&data)?;
+                        (state(&r.state)?, r.deposit.evidence().amount)
+                    }
+                };
+                let subject: String = row.try_get("subject")?;
+                Ok(QueueEntry {
+                    cursor: row.try_get("cursor")?,
+                    subject_hash: crate::identity::PayloadHash::from_bytes(
+                        Sha256::digest(subject.as_bytes()).into(),
+                    ),
+                    state,
+                    amount,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) async fn operator_claim_alert(
+        &self,
+        actor: &Id,
+        now: Timestamp,
+    ) -> Result<Option<AlertClaim>> {
+        let mut tx = self.write().await?;
+        let until = Timestamp(now.0.checked_add(30).ok_or(Error::Overflow)?);
+        let row = sqlx::query("UPDATE operator_alert_deliveries SET lease_actor=?,lease_until=?,generation=generation+1,attempts=attempts+1 WHERE sequence=(SELECT sequence FROM operator_alert_deliveries WHERE delivered_at IS NULL AND due_at<=? AND (lease_until IS NULL OR lease_until<=?) ORDER BY sequence LIMIT 1) RETURNING sequence,generation,kind,subject,reason,active,attempts")
+            .bind(actor.as_str()).bind(time(until)?).bind(time(now)?).bind(time(now)?).fetch_optional(&mut *tx).await?;
+        let claim = row
+            .map(|r| -> Result<AlertClaim> {
+                Ok(AlertClaim {
+                    sequence: r.try_get("sequence")?,
+                    generation: r.try_get("generation")?,
+                    kind: r.try_get("kind")?,
+                    subject: Id::new(r.try_get::<String, _>("subject")?)?,
+                    reason: r.try_get("reason")?,
+                    active: r.try_get("active")?,
+                    attempts: r.try_get("attempts")?,
+                    lease_until: until,
+                })
+            })
+            .transpose()?;
+        if let Some(claim) = &claim {
+            audit(
+                &mut tx,
+                &Id::new(format!("operator-alert:{}", claim.sequence))?,
+                &format!("ALERT_CLAIMED:{}:{}", actor.as_str(), claim.generation),
+                now,
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(claim)
+    }
+
+    pub(crate) async fn operator_finish_alert(
+        &self,
+        actor: &Id,
+        claim: &AlertClaim,
+        evidence: Option<&Id>,
+        now: Timestamp,
+    ) -> Result<()> {
+        let mut tx = self.write().await?;
+        let row = sqlx::query("SELECT lease_actor,generation,lease_until,attempts,delivered_at,delivery_evidence FROM operator_alert_deliveries WHERE sequence=?")
+            .bind(claim.sequence).fetch_optional(&mut *tx).await?.ok_or(Error::NotFound)?;
+        if row.try_get::<Option<String>, _>("lease_actor")?.as_deref() != Some(actor.as_str())
+            || row.try_get::<i64, _>("generation")? != claim.generation
+        {
+            return Err(RepositoryError::LeaseLost);
+        }
+        if row.try_get::<Option<i64>, _>("delivered_at")?.is_some() {
+            if evidence.is_none()
+                || row
+                    .try_get::<Option<String>, _>("delivery_evidence")?
+                    .as_deref()
+                    != evidence.map(Id::as_str)
+            {
+                return Err(Error::IdempotencyConflict.into());
+            }
+            return Ok(());
+        }
+        let current_time = time(now)?;
+        if row
+            .try_get::<Option<i64>, _>("lease_until")?
+            .is_none_or(|until| until <= current_time || current_time < until.saturating_sub(30))
+        {
+            return Err(RepositoryError::LeaseLost);
+        }
+        let attempts: i64 = row.try_get("attempts")?;
+        let delay = 5u64.saturating_mul(1u64 << attempts.clamp(0, 6)).min(300);
+        let due = Timestamp(now.0.checked_add(delay).ok_or(Error::Overflow)?);
+        sqlx::query("UPDATE operator_alert_deliveries SET delivered_at=?,delivery_evidence=?,due_at=?,lease_until=NULL WHERE sequence=?")
+            .bind(if evidence.is_some() {Some(time(now)?)} else {None}).bind(evidence.map(Id::as_str)).bind(time(due)?).bind(claim.sequence).execute(&mut *tx).await?;
+        audit(
+            &mut tx,
+            &Id::new(format!("operator-alert:{}", claim.sequence))?,
+            &format!(
+                "ALERT_{}:{}:{}",
+                if evidence.is_some() {
+                    "DELIVERED"
+                } else {
+                    "RETRY"
+                },
+                actor.as_str(),
+                evidence.map(Id::as_str).unwrap_or("SINK_UNAVAILABLE")
+            ),
+            now,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub(crate) async fn operator_resolve(
         &self,
         actor: &Id,

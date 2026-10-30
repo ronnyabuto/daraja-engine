@@ -31,6 +31,7 @@ to disabled. See the [roadmap](docs/roadmap.md) for the remaining work.
 - [Durable outbound dispatch](docs/outbound-dispatch.md)
 - [Outbound reconciliation and manual escalation](docs/outbound-reconcile.md)
 - [Liquidity telemetry, reservations and optional sweeps](docs/liquidity.md)
+- [Operator recovery runbook (stage 15 in progress)](docs/operator-runbook.md)
 - [Payout and balance transport](docs/payout-transport.md)
 - [Callback ingress and C2B validation](docs/webhook-ingress.md)
 - [Pinned protocol and provider findings](docs/protocol-contract.md)

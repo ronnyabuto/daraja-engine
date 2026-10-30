@@ -79,11 +79,75 @@ pub struct PayoutView {
     pub has_final_evidence: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum QueueKind {
+    PendingPayouts,
+    ExceptionDeposits,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct QueueEntry {
+    pub cursor: i64,
+    pub subject_hash: PayloadHash,
+    pub state: String,
+    pub amount: Amount,
+}
+
+/// Sink delivery is at least once. Deduplicate on sequence; acknowledge only
+/// after the external sink durably accepts the alert.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct AlertClaim {
+    pub sequence: i64,
+    pub generation: i64,
+    pub kind: String,
+    pub subject: Id,
+    pub reason: String,
+    pub active: bool,
+    pub attempts: i64,
+    pub lease_until: Timestamp,
+}
+
 pub struct OperatorService {
     repository: Repository,
     credentials: Vec<OperatorCredential>,
 }
 impl OperatorService {
+    pub async fn queue(
+        &self,
+        token: &Secret,
+        kind: QueueKind,
+        after: i64,
+        limit: u32,
+    ) -> Result<Vec<QueueEntry>, OperatorError> {
+        self.authenticate(token, false)?;
+        Ok(self.repository.operator_queue(kind, after, limit).await?)
+    }
+
+    pub async fn claim_alert(
+        &self,
+        token: &Secret,
+        now: Timestamp,
+    ) -> Result<Option<AlertClaim>, OperatorError> {
+        let actor = self.authenticate(token, true)?;
+        Ok(self.repository.operator_claim_alert(actor, now).await?)
+    }
+
+    /// None retries with persisted bounded exponential backoff. Some evidence
+    /// acknowledges durable external delivery, never a financial resolution.
+    pub async fn finish_alert(
+        &self,
+        token: &Secret,
+        claim: &AlertClaim,
+        evidence: Option<&Id>,
+        now: Timestamp,
+    ) -> Result<(), OperatorError> {
+        let actor = self.authenticate(token, true)?;
+        Ok(self
+            .repository
+            .operator_finish_alert(actor, claim, evidence, now)
+            .await?)
+    }
+
     pub fn new(
         repository: Repository,
         credentials: Vec<OperatorCredential>,

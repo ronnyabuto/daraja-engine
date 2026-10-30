@@ -1,9 +1,10 @@
 # Operator recovery (stage 15, in progress)
 
 The `daraja-core::operations::OperatorService` library currently supports a
-redacted payout view and manual payout resolution. It has no network listener
-or CLI. Daemon integration, exception/refund/re-quote commands and alert delivery
-are still pending. Do not deploy this partial stage as an operator console.
+redacted payout view, bounded pending/exception queues, manual payout resolution
+and leased alert delivery. It has no network listener or CLI. Daemon integration,
+safe verification retry, hold review, refund and re-quote commands are still
+pending. Do not deploy this partial stage as an operator console.
 
 Deployment configuration owns a separate credential list (maximum 64 actors).
 Tokens must contain at least 32 bytes, be generated with suitable randomness,
@@ -55,6 +56,33 @@ escalates it to manual and asserts CDK Pending; rejects a wrong amount and
 asserts it is still Pending; accepts exact reviewed Paid evidence with receipt
 `ACTUAL17`; closes/reopens SQLite and replays the command with the same result.
 It verifies the complete immutable audit record and one released reservation.
-The second command currently passes five tests, additionally checking access
+The second command currently passes eight tests, additionally checking access
 control/redaction, concurrent replay/stale commands, late contradictory success
-and rollback/recovery after an audit insert failure.
+and rollback/recovery after an audit insert failure, bounded queues and alert
+retry/recovery.
+
+## Queue and alert delivery integration
+
+`queue` accepts `PendingPayouts` or `ExceptionDeposits`, an exclusive row cursor
+and a limit from 1 to 100. Pages contain amount, state and a hashed subject;
+they omit raw receipt identities, destinations and wire bodies. Queue membership
+is live, so restart scans at cursor zero to find older records that become
+eligible again. These scans are operational projections, not fund allocations.
+
+Manual payout escalation and liquidity state changes enqueue alert deliveries
+in the same SQLite transaction through migration 0011 triggers. Existing alerts
+are backfilled. Identical liquidity refreshes do not create new deliveries;
+recovery creates a distinct event. `claim_alert` returns one due event under a
+30-second generation lease. A Reconciler-owned sink integration sends it outside
+SQLite, deduplicates by sequence, and calls `finish_alert` with a durable sink
+acceptance reference. A lost acknowledgment may repeat delivery. Sinks should
+also apply sequence ordering per subject to avoid presenting delayed older
+alerts as current status.
+
+On sink failure, finish with no evidence: attempts/backoff persist, from 10
+seconds to a maximum of 300 seconds. On process exit, the lease expires and
+another operator process may claim the same sequence with a new generation.
+Expired generations cannot acknowledge; an identical successful acknowledgment
+can be repeated after a lost response. Claims, retries and delivery evidence
+are audited. Alert delivery never resolves money or releases proofs. No external
+sink is contacted by the library or the synthetic tests.

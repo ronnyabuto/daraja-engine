@@ -7,7 +7,9 @@ use daraja_core::{
     crypto::Secret,
     identity::{Id, ReceiptId, RequestKey, RequestPayload},
     inbound::EvidenceSource,
-    operations::{OperatorCredential, OperatorError, OperatorRole, OperatorService, ResolvePayout},
+    operations::{
+        OperatorCredential, OperatorError, OperatorRole, OperatorService, QueueKind, ResolvePayout,
+    },
     outbound::{
         CdkPaymentState, DispatchRecord, FinalOutcome, OutboundState, Payout, PayoutAttestation,
     },
@@ -334,5 +336,207 @@ async fn failed_audit_write_rolls_back_resolution_and_reservation_release() {
         s.resolve_payout(&token(), &request, Timestamp(102))
             .await
             .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn alert_delivery_restarts_retries_and_fences_stale_acknowledgments() {
+    let (dir, r, request) = fixture().await;
+    let s = service(&r);
+    assert!(matches!(
+        s.claim_alert(&observer(), Timestamp(100)).await,
+        Err(OperatorError::Forbidden)
+    ));
+    let first = s
+        .claim_alert(&token(), Timestamp(100))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.kind, "MANUAL_PAYOUT");
+    assert!(
+        s.claim_alert(&token(), Timestamp(101))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop(s);
+    r.close().await;
+    let reopened = Repository::open(dir.path().join("ledger.sqlite"))
+        .await
+        .unwrap();
+    let s = service(&reopened);
+    let recovered = s
+        .claim_alert(&token(), Timestamp(130))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.sequence, first.sequence);
+    assert!(recovered.generation > first.generation);
+    assert!(matches!(
+        s.finish_alert(&token(), &first, Some(&id("sink-1")), Timestamp(131))
+            .await,
+        Err(OperatorError::Repository(RepositoryError::LeaseLost))
+    ));
+    s.finish_alert(&token(), &recovered, None, Timestamp(131))
+        .await
+        .unwrap();
+    assert!(
+        s.claim_alert(&token(), Timestamp(150))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let retry = s
+        .claim_alert(&token(), Timestamp(151))
+        .await
+        .unwrap()
+        .unwrap();
+    s.finish_alert(
+        &token(),
+        &retry,
+        Some(&id("sink-accepted-17")),
+        Timestamp(152),
+    )
+    .await
+    .unwrap();
+    s.finish_alert(
+        &token(),
+        &retry,
+        Some(&id("sink-accepted-17")),
+        Timestamp(200),
+    )
+    .await
+    .unwrap();
+    assert!(
+        s.claim_alert(&token(), Timestamp(500))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        s.payout(&token(), &request.payout_id)
+            .await
+            .unwrap()
+            .cdk_state,
+        CdkPaymentState::Pending
+    );
+}
+
+#[tokio::test]
+async fn liquidity_alerts_enqueue_only_changes_and_recovery() {
+    let (dir, r, _) = fixture().await;
+    let mut c = connection(&dir).await;
+    sqlx::query(
+        "INSERT INTO liquidity_alerts VALUES('collection','LOW_FLOAT_BANK_PESALINK',1,100)",
+    )
+    .execute(&mut c)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE liquidity_alerts SET updated_at=101 WHERE role='collection'")
+        .execute(&mut c)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE liquidity_alerts SET active=0,reason='RECOVERED',updated_at=102 WHERE role='collection'").execute(&mut c).await.unwrap();
+    let s = service(&r);
+    let manual = s
+        .claim_alert(&token(), Timestamp(103))
+        .await
+        .unwrap()
+        .unwrap();
+    s.finish_alert(&token(), &manual, Some(&id("sink-1")), Timestamp(104))
+        .await
+        .unwrap();
+    let low = s
+        .claim_alert(&token(), Timestamp(105))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(low.kind, "LIQUIDITY");
+    assert!(low.active);
+    s.finish_alert(&token(), &low, Some(&id("sink-2")), Timestamp(106))
+        .await
+        .unwrap();
+    let recovered = s
+        .claim_alert(&token(), Timestamp(107))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!recovered.active);
+    assert_eq!(recovered.reason, "RECOVERED");
+    s.finish_alert(&token(), &recovered, Some(&id("sink-3")), Timestamp(108))
+        .await
+        .unwrap();
+    assert!(
+        s.claim_alert(&token(), Timestamp(109))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn bounded_queues_redact_subjects_and_remove_terminal_payouts() {
+    use daraja_core::inbound::{DepositAttestation, DepositRail, VerifiedDeposit};
+    let (_dir, r, request) = fixture().await;
+    r.confirm(
+        VerifiedDeposit::attest(DepositAttestation {
+            payer: None,
+            source: EvidenceSource::ReviewedStatement(id("orphan-evidence")),
+            receipt: ReceiptId::new("PRIVATE18").unwrap(),
+            quote_id: None,
+            amount: kes(900),
+            shortcode: id("12345"),
+            rail: DepositRail::C2b {
+                account_ref: id("UNKNOWN1"),
+            },
+            received_at: Timestamp(10),
+            verified_at: Timestamp(20),
+        })
+        .unwrap(),
+        None,
+    )
+    .await
+    .unwrap();
+    let s = service(&r);
+    assert!(
+        s.queue(&Secret::new("application"), QueueKind::PendingPayouts, 0, 1)
+            .await
+            .is_err()
+    );
+    assert!(
+        s.queue(&observer(), QueueKind::PendingPayouts, 0, 101)
+            .await
+            .is_err()
+    );
+    let pending = s
+        .queue(&observer(), QueueKind::PendingPayouts, 0, 1)
+        .await
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert!(
+        s.queue(&observer(), QueueKind::PendingPayouts, pending[0].cursor, 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let exceptions = s
+        .queue(&observer(), QueueKind::ExceptionDeposits, 0, 10)
+        .await
+        .unwrap();
+    assert_eq!(exceptions.len(), 1);
+    assert_eq!(exceptions[0].amount, kes(900));
+    assert!(
+        !serde_json::to_string(&exceptions)
+            .unwrap()
+            .contains("PRIVATE18")
+    );
+    s.resolve_payout(&token(), &request, Timestamp(101))
+        .await
+        .unwrap();
+    assert!(
+        s.queue(&observer(), QueueKind::PendingPayouts, 0, 10)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }
