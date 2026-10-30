@@ -51,6 +51,7 @@ impl From<serde_json::Error> for RepositoryError {
 mod dispatch;
 mod exceptions;
 mod liquidity;
+mod operations;
 mod outbound_reconcile;
 mod valuation;
 pub use exceptions::{DepositPolicy, RefundAuthorization, RefundRequest};

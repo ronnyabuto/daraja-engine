@@ -9,6 +9,7 @@ pub mod fx;
 pub mod identity;
 pub mod inbound;
 pub mod liquidity;
+pub mod operations;
 pub mod outbound;
 pub mod payout;
 pub mod reconcile;
