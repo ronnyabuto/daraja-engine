@@ -203,3 +203,19 @@ Latest verified query sequence prevents out-of-order callbacks from replacing
 newer observations. Sweep admission includes snapshot uniqueness, unresolved
 exclusion, cooldown and gross daily limits under that same writer lock.
 See [liquidity](liquidity.md) for trust, freshness and account separation.
+
+## Operator recovery additions (stage 15 in progress)
+
+Migration 0010 adds append-only `operator_commands`, keyed by actor and command
+ID, with full reviewed command/evidence, reason, expected payout version, request
+hash, saved result/version and timestamp. Manual resolution commits this record,
+the payout CAS, exact reservation release and job fencing together. Conflicting
+terminal evidence is retained without changing financial state. Access and
+recovery instructions are in the [operator runbook](operator-runbook.md).
+
+Migration 0011 adds `operator_alert_deliveries`. Insert/change triggers enqueue
+manual and liquidity alerts transactionally, including liquidity recovery, and
+backfill existing alerts. Delivery has bounded generation leases, persisted
+attempts/backoff and acknowledgment evidence; a restart cannot lose an unacked
+event. Queue pages omit raw customer/receipt data. Refund execution and FX
+exception allocation have not changed in these migrations and remain pending.

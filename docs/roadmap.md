@@ -18,7 +18,7 @@ workspace, not a runnable payment service or a production-ready mint integration
 | 12 | Idempotent quoted payout dispatch, durable acknowledgment/callback correlation and crash recovery | Locally verified; live gates disabled |
 | 13 | Leased outbound reconciliation, evidence-scoped probes, bounded polling and durable manual alerts | Locally verified; live gates disabled |
 | 14 | Separate balance telemetry, transactional quote float reservations and opt-in bounded linked sweeps | Locally verified; live balance/sweep gates disabled |
-| 15 | Authenticated operator recovery | Planned |
+| 15 | Authenticated operator recovery | In progress: manual resolution, redacted queues and leased alerts locally verified; refund/re-quote workflows pending |
 | 16 | Optional PostgreSQL parity | Planned |
 | 17–19 | CDK service implementation and real mint/proof-lock integration | Planned |
 | 20–24 | Daemon REST/gRPC, reference clients and consumer examples | Planned |
