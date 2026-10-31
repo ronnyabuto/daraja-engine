@@ -18,6 +18,54 @@ fn view(p: &Payout, version: i64) -> PayoutView {
 }
 
 impl Repository {
+    pub(crate) async fn operator_review_deposit_hold(
+        &self,
+        actor: &Id,
+        request: &crate::operations::ReviewDepositHold,
+        now: Timestamp,
+    ) -> Result<()> {
+        let mut tx = self.write().await?;
+        let data = encode(request)?;
+        let previous: Option<String> = sqlx::query_scalar(
+            "SELECT request FROM operator_hold_reviews WHERE actor=? AND command_id=?",
+        )
+        .bind(actor.as_str())
+        .bind(request.command_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(previous) = previous {
+            if previous != data {
+                return Err(Error::IdempotencyConflict.into());
+            }
+            return Ok(());
+        }
+        changed(
+            sqlx::query("DELETE FROM deposit_blocks WHERE quote_id=? AND reason=?")
+                .bind(request.quote_id.as_str())
+                .bind(request.expected_reason.as_str())
+                .execute(&mut *tx)
+                .await?
+                .rows_affected(),
+        )?;
+        sqlx::query("INSERT INTO operator_hold_reviews VALUES(?,?,?,?,?)")
+            .bind(actor.as_str())
+            .bind(request.command_id.as_str())
+            .bind(request.quote_id.as_str())
+            .bind(&data)
+            .bind(time(now)?)
+            .execute(&mut *tx)
+            .await?;
+        audit(
+            &mut tx,
+            &request.quote_id,
+            &format!("HOLD_REVIEWED:{}:{}", actor.as_str(), data),
+            now,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub(crate) async fn operator_queue(
         &self,
         kind: QueueKind,

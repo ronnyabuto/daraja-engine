@@ -447,14 +447,51 @@ async fn persisted_risk_holds_velocity_release_and_reversal_alerts_preserve_mint
         .await
         .unwrap();
     assert!(settle(&r, "RISK0002", 51).await.is_err());
-    r.release_deposit_hold(
-        &id("RISK0002"),
-        &id("operator"),
-        &id("reviewed-velocity"),
-        Timestamp(51),
+    use daraja_core::{
+        crypto::Secret,
+        operations::{OperatorCredential, OperatorRole, OperatorService, ReviewDepositHold},
+    };
+    let token = Secret::new("synthetic-review-token-000000000000000000");
+    let service = OperatorService::new(
+        r.clone(),
+        vec![OperatorCredential::new(id("reviewer"), &token, OperatorRole::Reconciler).unwrap()],
     )
-    .await
     .unwrap();
+    let request = ReviewDepositHold {
+        command_id: id("review-1"),
+        quote_id: id("RISK0002"),
+        expected_reason: id("VELOCITY"),
+        reason: id("case-1"),
+        evidence_ref: id("statement-1"),
+    };
+    assert!(
+        service
+            .review_deposit_hold(&Secret::new("unauthorized"), &request, Timestamp(51))
+            .await
+            .is_err()
+    );
+    let mut stale = request.clone();
+    stale.expected_reason = id("REVERSAL_REPORTED");
+    assert!(
+        service
+            .review_deposit_hold(&token, &stale, Timestamp(51))
+            .await
+            .is_err()
+    );
+    let (a, b) = tokio::join!(
+        service.review_deposit_hold(&token, &request, Timestamp(51)),
+        service.review_deposit_hold(&token, &request, Timestamp(51))
+    );
+    a.unwrap();
+    b.unwrap();
+    let mut conflict = request.clone();
+    conflict.evidence_ref = id("other-evidence");
+    assert!(
+        service
+            .review_deposit_hold(&token, &conflict, Timestamp(52))
+            .await
+            .is_err()
+    );
     settle(&r, "RISK0002", 51).await.unwrap();
     let mut e = evidence("KNOWN", Some("TRUSTED1"), 10000, 10, 20);
     e.payer = Some(VerifiedPayer {

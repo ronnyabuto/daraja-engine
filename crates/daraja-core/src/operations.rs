@@ -68,6 +68,15 @@ pub struct ResolvePayout {
     pub evidence: PayoutAttestation,
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ReviewDepositHold {
+    pub command_id: Id,
+    pub quote_id: Id,
+    pub expected_reason: Id,
+    pub reason: Id,
+    pub evidence_ref: Id,
+}
+
 /// Contains no wire body, destination, callback URL, receipt or bearer material.
 #[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
 pub struct PayoutView {
@@ -112,6 +121,19 @@ pub struct OperatorService {
     credentials: Vec<OperatorCredential>,
 }
 impl OperatorService {
+    pub async fn review_deposit_hold(
+        &self,
+        token: &Secret,
+        request: &ReviewDepositHold,
+        now: Timestamp,
+    ) -> Result<(), OperatorError> {
+        let actor = self.authenticate(token, true)?;
+        Ok(self
+            .repository
+            .operator_review_deposit_hold(actor, request, now)
+            .await?)
+    }
+
     pub async fn queue(
         &self,
         token: &Secret,
