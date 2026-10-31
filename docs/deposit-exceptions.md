@@ -1,8 +1,8 @@
 # Deposit exceptions and refund reservations
 
 Stage 10 extends `daraja-core::inbound` and `repository` with durable exception
-handling. These are trusted library boundaries. Authenticated operator APIs,
-re-quote workflows and daemon configuration parsing remain later work. Callbacks
+handling. These are trusted library boundaries. Authenticated operator review, refund execution and FX re-quoting are described in
+the [operator runbook](operator-runbook.md); daemon configuration parsing remains later work. Callbacks
 and customer receipt-number submissions cannot create ownership attestations,
 release holds or authorize refunds. Live independent verification and C2B
 validation remain separately disabled capability gates.
@@ -49,8 +49,7 @@ exists. Stage 15 must authenticate operators and obtain/review the actual eviden
 constructing this Rust value does not perform that review.
 
 A refund reserves whole verified exception receipts. For quote-allocated funds,
-the request must cover all quote allocations and the quote must be underpaid or
-overpaid. The quote atomically becomes `REFUND_HELD`: later receipts go into
+the request must cover all quote allocations and the quote must be underpaid, overpaid or fully funded with expired FX. The quote atomically becomes `REFUND_HELD`: later receipts go into
 separate exception custody, and neither settlement nor top-up admission can spend
 the reserved balance. Existing receipt provenance/allocation is immutable.
 Unique receipt reservations prevent another refund from using the same funds.
@@ -64,14 +63,12 @@ request ID and terms returns the original reservation; changed terms conflict.
 Already-settled allocations cannot be refunded. Extra held receipts after mint
 settlement can be reserved independently.
 
-Every durable request has `EXECUTION_GATED` status. There is no refund execution,
-provider dispatch or successful-refund shortcut in this stage. Stages 12/13 must
-route this immutable reservation through the same commit-before-I/O outbound
-saga, preserve the refund identity and tariff, and use independent final evidence
-before marking funds refunded or releasing a reservation. Transport errors and
-timers must keep the payout Pending. No cancellation/reallocation shortcut is
-provided here. B2C tariff evaluation remains stage 11; this boundary accepts only
-a trusted frozen tariff snapshot.
+Reservations initially have `EXECUTION_GATED` status. Stage 15 binds a reviewed
+reservation to one immutable B2C quote and executes the existing outbound saga;
+`refund_status` projects the linked payout when present. Pending/manual outcomes
+retain custody. Independent Paid resolution closes exception custody atomically;
+receipt reservations remain permanent. See the operator runbook for failures,
+replay and the conservative recovery limits.
 
 ## Payer risk holds and reversal incidents
 
