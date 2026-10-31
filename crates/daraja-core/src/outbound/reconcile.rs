@@ -120,6 +120,55 @@ pub struct OutboundReconciler<Q, V, C> {
     pub config: ReconcileConfig,
 }
 impl<Q: OutboundQueries, V: PayoutVerifier, C: Clock> OutboundReconciler<Q, V, C> {
+    /// Inspect a late observation through the independent verifier. Completed
+    /// jobs are never reopened and this path cannot issue another transfer.
+    pub async fn inspect_late_evidence(&self, id: &Id) -> Result<bool> {
+        let target = self.repository.payout_target(id).await?;
+        if !matches!(
+            target.payout.state(),
+            OutboundState::Paid | OutboundState::Failed
+        ) {
+            return Err(Error::InvalidTransition.into());
+        }
+        let now = self.now()?;
+        let Some(evidence) =
+            tokio::time::timeout(Duration::from_secs(5), self.verifier.evidence(&target, now))
+                .await
+                .ok()
+                .flatten()
+        else {
+            return Ok(false);
+        };
+        let evidence_ref = match &evidence.source {
+            crate::inbound::EvidenceSource::ReviewedStatement(id)
+            | crate::inbound::EvidenceSource::AuthenticatedProviderRecord(id) => id.clone(),
+        };
+        let bytes = serde_json::to_vec(&evidence)?;
+        use sha2::Digest;
+        let hash = sha2::Sha256::digest(bytes);
+        let command_id = Id::new(format!(
+            "late:{}",
+            hash.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        ))?;
+        let (_, version) = self.repository.payout(id).await?;
+        let (_, contradictory) = self
+            .repository
+            .operator_resolve(
+                &Id::new("system-independent-verifier")?,
+                &crate::operations::ResolvePayout {
+                    command_id,
+                    payout_id: id.clone(),
+                    expected_version: version,
+                    reason: Id::new("late-independent-evidence")?,
+                    evidence_ref,
+                    evidence,
+                },
+                now,
+            )
+            .await?;
+        Ok(contradictory)
+    }
+
     fn now(&self) -> Result<Timestamp> {
         Ok(Timestamp(
             self.clock

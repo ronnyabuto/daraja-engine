@@ -695,6 +695,17 @@ impl Repository {
             if stored != *quote {
                 return Err(Error::EvidenceMismatch.into());
             }
+            let refund: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM refund_execution WHERE quote_id=?)",
+            )
+            .bind(quote.id().as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+            if refund != (key.operation.as_str() == "refund")
+                || (refund && key.caller.as_str() != "operator-refund")
+            {
+                return Err(Error::EvidenceMismatch.into());
+            }
             validated = validated.with_quote(stored, payout.started_at())?;
         }
         let fresh = Payout::dispatching(

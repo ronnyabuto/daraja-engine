@@ -777,3 +777,198 @@ mod reconcile_stage13;
 
 #[path = "liquidity.rs"]
 mod liquidity_stage14;
+
+#[tokio::test]
+async fn operator_refund_uses_one_send_saga_and_consumes_exception_only_after_paid() {
+    use daraja_core::{
+        identity::ReceiptId,
+        inbound::{DepositAttestation, DepositRail, EvidenceSource, VerifiedDeposit},
+        operations::{OperatorCredential, OperatorRole, OperatorService},
+        outbound::{FinalOutcome, PayoutAttestation},
+        repository::{PayoutChange, RefundAuthorization},
+    };
+    for reply in [
+        Reply::Json(503, json!({"errorCode":"temporary"})),
+        Reply::Json(200, status_ack()),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("refund.sqlite");
+        let repo = Repository::open(&path).await.unwrap();
+        super::liquidity_fixture::fund(&repo).await;
+        repo.confirm(
+            VerifiedDeposit::attest(DepositAttestation {
+                source: EvidenceSource::ReviewedStatement(id("statement")),
+                receipt: ReceiptId::new("REFUND1").unwrap(),
+                quote_id: None,
+                amount: kes(12400),
+                shortcode: id("600000"),
+                rail: DepositRail::C2b {
+                    account_ref: id("UNKNOWN1"),
+                },
+                received_at: Timestamp(time().0 - 10),
+                verified_at: time(),
+                payer: None,
+            })
+            .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let token = Secret::new("synthetic-operator-token-0000000000000000");
+        let operator = OperatorService::new(
+            repo.clone(),
+            vec![
+                OperatorCredential::new(id("reviewer"), &token, OperatorRole::Reconciler).unwrap(),
+            ],
+        )
+        .unwrap();
+        let schedule = |v| {
+            vec![Schedule {
+                version: id(v),
+                effective_from: Timestamp(time().0 - 1),
+                effective_until: Timestamp(time().0 + 600),
+                bands: vec![Band {
+                    min_kes: 1,
+                    max_kes: 100000,
+                    fee: kes(100),
+                }],
+            }]
+        };
+        let tariffs = Tariffs::new(schedule("refund-b2c"), schedule("refund-b2b")).unwrap();
+        let q = PaymentQuote::new(
+            id("refund-quote"),
+            "0712345678",
+            kes(12300),
+            Unit::KesMinor,
+            &tariffs,
+            None,
+            time(),
+            Timestamp(time().0 + 300),
+        )
+        .unwrap();
+        let auth = RefundAuthorization {
+            operator: id("spoofed"),
+            owner: id("reviewed-owner"),
+            destination: q.destination().clone(),
+            evidence: id("reviewed-original-payer"),
+            receipts: vec![ReceiptId::new("REFUND1").unwrap()],
+        };
+        let reserved = operator
+            .request_refund(
+                &token,
+                &id("refund"),
+                auth.clone(),
+                q.tariff().clone(),
+                time(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reserved.authorization.operator, id("reviewer"));
+        let server = Server::new(vec![reply]).await;
+        let payments = service(&repo, &server);
+        assert!(
+            operator
+                .execute_refund(
+                    &Secret::new("wrong"),
+                    &id("refund"),
+                    &id("case"),
+                    &q,
+                    &payments,
+                    time()
+                )
+                .await
+                .is_err()
+        );
+        let p = operator
+            .execute_refund(&token, &id("refund"), &id("case"), &q, &payments, time())
+            .await
+            .unwrap();
+        assert_pending(&p);
+        assert_eq!(server.count(), 1);
+        assert!(
+            payments
+                .make_payment(make("steal-refund", "refund-quote"))
+                .await
+                .is_err()
+        );
+        let again = operator
+            .execute_refund(&token, &id("refund"), &id("case"), &q, &payments, time())
+            .await
+            .unwrap();
+        assert_eq!(again.dispatch().operation_id(), p.dispatch().operation_id());
+        assert_eq!(server.count(), 1);
+        let reopened = Repository::open(&path).await.unwrap();
+        let restarted = OperatorService::new(
+            reopened.clone(),
+            vec![
+                OperatorCredential::new(id("reviewer"), &token, OperatorRole::Reconciler).unwrap(),
+            ],
+        )
+        .unwrap();
+        let resumed_payments = service(&reopened, &server);
+        let resumed = restarted
+            .execute_refund(
+                &token,
+                &id("refund"),
+                &id("case"),
+                &q,
+                &resumed_payments,
+                time(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resumed.dispatch().operation_id(),
+            p.dispatch().operation_id()
+        );
+        assert_eq!(server.count(), 1);
+        let mut raw = db(&path).await;
+        let unresolved: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM unreconciled_deposits WHERE resolved_at IS NULL",
+        )
+        .fetch_one(&mut raw)
+        .await
+        .unwrap();
+        assert_eq!(unresolved, 1);
+        assert!(
+            operator
+                .request_refund(
+                    &token,
+                    &id("second-refund"),
+                    auth,
+                    q.tariff().clone(),
+                    time()
+                )
+                .await
+                .is_err()
+        );
+        let (_, version) = repo.payout(p.dispatch().operation_id()).await.unwrap();
+        repo.change_payout(
+            p.dispatch().operation_id(),
+            version,
+            PayoutChange::Resolve(PayoutAttestation {
+                source: EvidenceSource::ReviewedStatement(id("verified-paid-record")),
+                operation_id: p.dispatch().operation_id().clone(),
+                payload_hash: p.dispatch().hash(),
+                amount: q.principal(),
+                destination: q.destination().clone(),
+                outcome: FinalOutcome::Paid {
+                    receipt: ReceiptId::new("ACTUALREFUND").unwrap(),
+                },
+            }),
+            time(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(repo.refund_status(&id("refund")).await.unwrap(), "Paid");
+        let unresolved: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM unreconciled_deposits WHERE resolved_at IS NULL",
+        )
+        .fetch_one(&mut raw)
+        .await
+        .unwrap();
+        assert_eq!(unresolved, 0);
+        assert_eq!(count(&mut raw, "settlement_events").await, 0);
+        assert_eq!(server.count(), 1);
+    }
+}

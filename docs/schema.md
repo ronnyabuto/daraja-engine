@@ -1,7 +1,7 @@
 # SQLite repository
 
 Owner: `daraja-core::repository::Repository`; domain rules remain in `inbound`,
-`outbound`, `amount` and `identity`. Nine ordered, embedded SQLx migrations live in
+`outbound`, `amount` and `identity`. Fifteen ordered, embedded SQLx migrations live in
 `crates/daraja-core/migrations`. SQLx records/checks their versions and checksums;
 `build.rs` watches the directory. Never edit an applied migration: add a new one.
 Opening a database applies missing migrations and rejects checksum mismatch.
@@ -219,3 +219,14 @@ backfill existing alerts. Delivery has bounded generation leases, persisted
 attempts/backoff and acknowledgment evidence; a restart cannot lose an unacked
 event. Queue pages omit raw customer/receipt data. Refund execution and FX
 exception allocation have not changed in these migrations and remain pending.
+
+Migrations 0012 and 0013 add immutable actor-scoped hold-review and inbound
+verification-retry commands. Audit insertion and the guarded change are atomic.
+
+Migration 0014 binds refund reservations to unique outgoing quotes, with an
+immutable actor/case authorization. Verified Paid reservation release closes
+associated exception custody transactionally. Migration 0015 links original and
+replacement FX quotes to an immutable owner/reason/evidence request and saved
+settlement event. Original receipt allocation remains immutable; disposition
+becomes Settled and the old quote cannot mint. Refund reservations and settled
+receipt checks enforce exclusive consumption under the existing writer lock.

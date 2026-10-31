@@ -501,16 +501,91 @@ impl Accounting {
         Ok(())
     }
 
-    pub(crate) fn reserve_refund(&mut self, id: &Id) -> Result<(), Error> {
+    pub(crate) fn reserve_refund(&mut self, id: &Id, now: Timestamp) -> Result<(), Error> {
         let quote = self.quotes.get_mut(id).ok_or(Error::NotFound)?;
-        if !matches!(
+        let expired_fx = quote
+            .terms
+            .fx
+            .as_ref()
+            .is_some_and(|fx| now >= fx.expires_at);
+        let eligible = matches!(
             quote.state,
             InboundState::UnderpaidHeld | InboundState::OverpaidHeld
-        ) {
+        ) || (expired_fx
+            && matches!(
+                quote.state,
+                InboundState::SettlementHeld | InboundState::Verifying
+            ));
+        if !eligible {
             return Err(Error::InvalidTransition);
         }
         quote.state = InboundState::RefundHeld;
         Ok(())
+    }
+
+    pub(crate) fn requote_held_fx(
+        &mut self,
+        original: &Id,
+        replacement: InboundQuote,
+        now: Timestamp,
+    ) -> Result<SettlementEvent, Error> {
+        let old = self.quotes.get(original).ok_or(Error::NotFound)?;
+        if matches!(old.state, InboundState::Paid | InboundState::RefundHeld)
+            || old.terms.fx.as_ref().is_none_or(|fx| now < fx.expires_at)
+            || self.blocked
+            || now < old.terms.hold_until
+            || replacement.id == *original
+            || replacement.shortcode != old.shortcode
+            || replacement.terms.tariff != old.terms.tariff
+            || replacement.terms.credit.unit() != Unit::Sat
+        {
+            return Err(Error::InvalidTransition);
+        }
+        replacement.terms.validate()?;
+        replacement
+            .terms
+            .fx
+            .as_ref()
+            .ok_or(Error::FxExpired)?
+            .validate_at(now)?;
+        if now >= replacement.terms.quote_expires_at {
+            return Err(Error::QuoteExpired);
+        }
+        let mut total = Amount::new(0, Unit::KesMinor);
+        let mut receipts = Vec::new();
+        for (id, record) in &self.receipts {
+            let e = record.deposit.evidence();
+            if e.quote_id.as_ref() != Some(original)
+                || record.state == DepositState::Settled
+                || now < e.verified_at
+                || e.shortcode != replacement.shortcode
+            {
+                return Err(Error::EvidenceMismatch);
+            }
+            total = total.checked_add(e.amount)?;
+            receipts.push(id.clone());
+        }
+        if total != replacement.terms.expected || receipts.is_empty() {
+            return Err(Error::AmountMismatch);
+        }
+        let event = SettlementEvent {
+            quote_id: replacement.id.clone(),
+            credit: replacement.terms.credit,
+            receipts,
+            settled_at: now,
+        };
+        self.quotes
+            .get_mut(original)
+            .expect("validated quote")
+            .state = InboundState::RefundHeld;
+        let mut replacement = replacement;
+        replacement.state = InboundState::Paid;
+        self.quotes.insert(replacement.id.clone(), replacement);
+        for record in self.receipts.values_mut() {
+            record.state = DepositState::Settled;
+        }
+        self.events.insert(event.quote_id.clone(), event.clone());
+        Ok(event)
     }
 
     pub(crate) fn confirm_with_grace(

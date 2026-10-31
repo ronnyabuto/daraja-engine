@@ -447,14 +447,95 @@ async fn persisted_risk_holds_velocity_release_and_reversal_alerts_preserve_mint
         .await
         .unwrap();
     assert!(settle(&r, "RISK0002", 51).await.is_err());
-    r.release_deposit_hold(
-        &id("RISK0002"),
-        &id("operator"),
-        &id("reviewed-velocity"),
-        Timestamp(51),
+    use daraja_core::{
+        crypto::Secret,
+        operations::{OperatorCredential, OperatorRole, OperatorService, ReviewDepositHold},
+    };
+    let token = Secret::new("synthetic-review-token-000000000000000000");
+    let service = OperatorService::new(
+        r.clone(),
+        vec![OperatorCredential::new(id("reviewer"), &token, OperatorRole::Reconciler).unwrap()],
     )
+    .unwrap();
+    let request = ReviewDepositHold {
+        command_id: id("review-1"),
+        quote_id: id("RISK0002"),
+        expected_reason: id("VELOCITY"),
+        reason: id("case-1"),
+        evidence_ref: id("statement-1"),
+    };
+    assert!(
+        service
+            .review_deposit_hold(&Secret::new("unauthorized"), &request, Timestamp(51))
+            .await
+            .is_err()
+    );
+    let mut stale = request.clone();
+    stale.expected_reason = id("REVERSAL_REPORTED");
+    assert!(
+        service
+            .review_deposit_hold(&token, &stale, Timestamp(51))
+            .await
+            .is_err()
+    );
+    let mut review_db = SqliteConnection::connect(&format!(
+        "sqlite:{}",
+        dir.path().join("ledger.sqlite").display()
+    ))
     .await
     .unwrap();
+    sqlx::query("CREATE TRIGGER reject_hold_audit BEFORE INSERT ON audit_records BEGIN SELECT RAISE(ABORT,'synthetic failure'); END").execute(&mut review_db).await.unwrap();
+    assert!(
+        service
+            .review_deposit_hold(&token, &request, Timestamp(51))
+            .await
+            .is_err()
+    );
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM deposit_blocks WHERE quote_id='RISK0002'")
+            .fetch_one(&mut review_db)
+            .await
+            .unwrap();
+    assert_eq!(remaining, 1);
+    sqlx::query("DROP TRIGGER reject_hold_audit")
+        .execute(&mut review_db)
+        .await
+        .unwrap();
+    let (a, b) = tokio::join!(
+        service.review_deposit_hold(&token, &request, Timestamp(51)),
+        service.review_deposit_hold(&token, &request, Timestamp(51))
+    );
+    a.unwrap();
+    b.unwrap();
+    sqlx::query("INSERT INTO deposit_blocks VALUES('RISK0002','REVERSAL_REPORTED',52)")
+        .execute(&mut review_db)
+        .await
+        .unwrap();
+    service
+        .review_deposit_hold(&token, &request, Timestamp(52))
+        .await
+        .unwrap();
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM deposit_blocks WHERE quote_id='RISK0002'")
+            .fetch_one(&mut review_db)
+            .await
+            .unwrap();
+    assert_eq!(remaining, 1);
+    let mut next = request.clone();
+    next.command_id = id("review-2");
+    next.expected_reason = id("REVERSAL_REPORTED");
+    service
+        .review_deposit_hold(&token, &next, Timestamp(52))
+        .await
+        .unwrap();
+    let mut conflict = request.clone();
+    conflict.evidence_ref = id("other-evidence");
+    assert!(
+        service
+            .review_deposit_hold(&token, &conflict, Timestamp(52))
+            .await
+            .is_err()
+    );
     settle(&r, "RISK0002", 51).await.unwrap();
     let mut e = evidence("KNOWN", Some("TRUSTED1"), 10000, 10, 20);
     e.payer = Some(VerifiedPayer {
@@ -551,4 +632,262 @@ async fn legacy_verified_receipts_decode_without_payer_and_new_policy_counts_dup
     assert_eq!(count(&dir, "deposit_blocks").await, 0);
     assert!(settle(&r, "LEGACY01", 49).await.is_err());
     settle(&r, "LEGACY01", 50).await.unwrap();
+}
+
+#[tokio::test]
+async fn authenticated_fx_requote_consumes_held_funds_once_with_fresh_credit() {
+    use daraja_core::{
+        crypto::Secret,
+        fx::OfflineOracle,
+        operations::{OperatorCredential, OperatorRole, OperatorService, RequoteHeldFx},
+    };
+    for (received, verified) in [(110, 120), (10, 20)] {
+        let (dir, r) = fixture().await;
+        r.insert_quote(&quote("FXOLD001", true), Timestamp(1))
+            .await
+            .unwrap();
+        r.confirm(
+            VerifiedDeposit::attest(evidence(
+                "FXLATE",
+                Some("FXOLD001"),
+                10000,
+                received,
+                verified,
+            ))
+            .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let token = Secret::new("synthetic-operator-token-0000000000000000");
+        let service = OperatorService::new(
+            r.clone(),
+            vec![
+                OperatorCredential::new(id("reviewer"), &token, OperatorRole::Reconciler).unwrap(),
+            ],
+        )
+        .unwrap();
+        let request = RequoteHeldFx {
+            command_id: id("fx-review"),
+            original_quote: id("FXOLD001"),
+            expected_version: r.quote(&id("FXOLD001")).await.unwrap().1,
+            replacement_quote: id("FXNEW001"),
+            account_ref: id("FXNEW001"),
+            owner: id("reviewed-owner"),
+            reason: id("case"),
+            evidence_ref: id("statement"),
+        };
+        let oracle = OfflineOracle {
+            snapshot: Some(FxSnapshot {
+                source: id("fresh-fixture"),
+                numerator: 2,
+                denominator: 1,
+                expires_at: Timestamp(400),
+            }),
+        };
+        assert!(
+            service
+                .requote_held_fx(&Secret::new("wrong"), &request, &oracle, Timestamp(130))
+                .await
+                .is_err()
+        );
+        let event = service
+            .requote_held_fx(&token, &request, &oracle, Timestamp(130))
+            .await
+            .unwrap();
+        assert_eq!(
+            event.credit,
+            oracle.snapshot.as_ref().unwrap().credit(kes(9900)).unwrap()
+        );
+        assert_eq!(event.receipts, vec![receipt("FXLATE")]);
+        assert_eq!(
+            r.quote(&id("FXOLD001")).await.unwrap().0.state(),
+            InboundState::RefundHeld
+        );
+        assert_eq!(
+            r.quote(&id("FXNEW001")).await.unwrap().0.state(),
+            InboundState::Paid
+        );
+        assert!(
+            r.request_refund(
+                &id("double-spend"),
+                authorization(&["FXLATE"]),
+                fee(100),
+                Timestamp(140)
+            )
+            .await
+            .is_err()
+        );
+        assert!(settle(&r, "FXOLD001", 140).await.is_err());
+        drop(service);
+        r.close().await;
+        let reopened = Repository::open(dir.path().join("ledger.sqlite"))
+            .await
+            .unwrap();
+        let service = OperatorService::new(
+            reopened.clone(),
+            vec![
+                OperatorCredential::new(id("reviewer"), &token, OperatorRole::Reconciler).unwrap(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            service
+                .requote_held_fx(
+                    &token,
+                    &request,
+                    &OfflineOracle { snapshot: None },
+                    Timestamp(500)
+                )
+                .await
+                .unwrap(),
+            event
+        );
+        let mut conflict = request.clone();
+        conflict.owner = id("changed-owner");
+        assert!(
+            service
+                .requote_held_fx(&token, &conflict, &oracle, Timestamp(500))
+                .await
+                .is_err()
+        );
+        assert_eq!(count(&dir, "settlement_events").await, 1);
+    }
+}
+
+#[tokio::test]
+async fn fx_requote_audit_rollback_and_refund_race_preserve_single_owner() {
+    use daraja_core::{
+        crypto::Secret,
+        fx::OfflineOracle,
+        operations::{OperatorCredential, OperatorRole, OperatorService, RequoteHeldFx},
+    };
+    let (dir, r) = fixture().await;
+    r.insert_quote(&quote("FXRACE01", true), Timestamp(1))
+        .await
+        .unwrap();
+    r.confirm(
+        VerifiedDeposit::attest(evidence("FXRACE", Some("FXRACE01"), 10000, 110, 120)).unwrap(),
+        None,
+    )
+    .await
+    .unwrap();
+    let token = Secret::new("synthetic-operator-token-0000000000000000");
+    let service = OperatorService::new(
+        r.clone(),
+        vec![OperatorCredential::new(id("reviewer"), &token, OperatorRole::Reconciler).unwrap()],
+    )
+    .unwrap();
+    let request = RequoteHeldFx {
+        command_id: id("race-command"),
+        original_quote: id("FXRACE01"),
+        expected_version: r.quote(&id("FXRACE01")).await.unwrap().1,
+        replacement_quote: id("FXRACE02"),
+        account_ref: id("FXRACE02"),
+        owner: id("reviewed-owner"),
+        reason: id("case"),
+        evidence_ref: id("statement"),
+    };
+    let oracle = OfflineOracle {
+        snapshot: Some(FxSnapshot {
+            source: id("fresh-fixture"),
+            numerator: 2,
+            denominator: 1,
+            expires_at: Timestamp(400),
+        }),
+    };
+    assert!(
+        service
+            .requote_held_fx(
+                &token,
+                &request,
+                &OfflineOracle { snapshot: None },
+                Timestamp(130)
+            )
+            .await
+            .is_err()
+    );
+    let mut stale = request.clone();
+    stale.expected_version += 1;
+    assert!(
+        service
+            .requote_held_fx(&token, &stale, &oracle, Timestamp(130))
+            .await
+            .is_err()
+    );
+    let mut raw = SqliteConnection::connect(&format!(
+        "sqlite:{}",
+        dir.path().join("ledger.sqlite").display()
+    ))
+    .await
+    .unwrap();
+    sqlx::query("CREATE TRIGGER reject_fx_audit BEFORE INSERT ON audit_records BEGIN SELECT RAISE(ABORT,'synthetic failure'); END").execute(&mut raw).await.unwrap();
+    assert!(
+        service
+            .requote_held_fx(&token, &request, &oracle, Timestamp(130))
+            .await
+            .is_err()
+    );
+    assert_eq!(count(&dir, "settlement_events").await, 0);
+    assert!(r.quote(&request.replacement_quote).await.is_err());
+    assert_ne!(
+        r.receipt(&receipt("FXRACE")).await.unwrap().unwrap().state,
+        DepositState::Settled
+    );
+    sqlx::query("DROP TRIGGER reject_fx_audit")
+        .execute(&mut raw)
+        .await
+        .unwrap();
+    let refund_id = id("race-refund");
+    let (reprice, refund) = tokio::join!(
+        service.requote_held_fx(&token, &request, &oracle, Timestamp(130)),
+        r.request_refund(
+            &refund_id,
+            authorization(&["FXRACE"]),
+            fee(100),
+            Timestamp(130)
+        )
+    );
+    assert_ne!(reprice.is_ok(), refund.is_ok());
+    if reprice.is_ok() {
+        assert_eq!(count(&dir, "settlement_events").await, 1);
+        assert_eq!(count(&dir, "refund_reservations").await, 0);
+    } else {
+        assert_eq!(count(&dir, "settlement_events").await, 0);
+        assert_eq!(count(&dir, "refund_reservations").await, 1);
+    }
+}
+
+#[tokio::test]
+async fn expired_fx_with_previously_allocated_exact_funds_can_reserve_refund() {
+    let (_dir, r) = fixture().await;
+    r.insert_quote(&quote("EXACTFX1", true), Timestamp(1))
+        .await
+        .unwrap();
+    r.confirm(deposit("EXACTFX", Some("EXACTFX1"), 10000), None)
+        .await
+        .unwrap();
+    assert!(
+        r.request_refund(
+            &id("too-early"),
+            authorization(&["EXACTFX"]),
+            fee(100),
+            Timestamp(21)
+        )
+        .await
+        .is_err()
+    );
+    r.request_refund(
+        &id("expired-refund"),
+        authorization(&["EXACTFX"]),
+        fee(100),
+        Timestamp(101),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        r.quote(&id("EXACTFX1")).await.unwrap().0.state(),
+        InboundState::RefundHeld
+    );
+    assert!(settle(&r, "EXACTFX1", 102).await.is_err());
 }

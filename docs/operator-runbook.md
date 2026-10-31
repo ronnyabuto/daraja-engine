@@ -1,10 +1,11 @@
-# Operator recovery (stage 15, in progress)
+# Operator recovery
 
-The `daraja-core::operations::OperatorService` library currently supports a
-redacted payout view, bounded pending/exception queues, manual payout resolution
-and leased alert delivery. It has no network listener or CLI. Daemon integration,
-safe verification retry, hold review, refund and re-quote commands are still
-pending. Do not deploy this partial stage as an operator console.
+The `daraja-core::operations::OperatorService` library supports authenticated
+redacted payout views, bounded pending/exception queues, safe verification retry,
+hold review, refund authorization/execution, held FX re-quoting, manual payout
+resolution and leased alerts. Deployment wiring supplies the trusted repository,
+provider clients, FX oracle and reviewed ownership evidence. There is no network
+listener or CLI; daemon mounting remains a later stage.
 
 Deployment configuration owns a separate credential list (maximum 64 actors).
 Tokens must contain at least 32 bytes, be generated with suitable randomness,
@@ -56,7 +57,7 @@ escalates it to manual and asserts CDK Pending; rejects a wrong amount and
 asserts it is still Pending; accepts exact reviewed Paid evidence with receipt
 `ACTUAL17`; closes/reopens SQLite and replays the command with the same result.
 It verifies the complete immutable audit record and one released reservation.
-The second command currently passes eight tests, additionally checking access
+The second command currently passes nine tests, additionally checking access
 control/redaction, concurrent replay/stale commands, late contradictory success
 and rollback/recovery after an audit insert failure, bounded queues and alert
 retry/recovery.
@@ -86,3 +87,88 @@ Expired generations cannot acknowledge; an identical successful acknowledgment
 can be repeated after a lost response. Claims, retries and delivery evidence
 are audited. Alert delivery never resolves money or releases proofs. No external
 sink is contacted by the library or the synthetic tests.
+
+## Safe inbound verification retry
+
+A Reconciler may submit `retry_verification` with a stable command ID, job ID,
+expected generation, opaque reason and evidence reference. Only due, unfinished
+POLL_STK, VERIFY_RECEIPT or INBOUND_CALLBACK work without a live lease is eligible.
+Backoff deadlines, poll slots and retry counts are preserved. The command fences
+older workers and leaves verification to the existing leased inbound reconciler;
+it supplies no settlement evidence or provider permission. Identical replay by
+the same actor survives restart; changed terms and stale generations conflict.
+The command and audit commit together. This command does not retry payouts.
+
+`review_deposit_hold` requires Reconciler credentials and an expected block reason.
+Its immutable command and audit commit with block removal. Existing value, time,
+FX and evidence predicates still apply. Replaying a prior command cannot remove
+a subsequently inserted block. Reviewers must obtain fresh evidence for new blocks.
+
+## Refund review and execution
+
+Use `request_refund` as a Reconciler after independently reviewing ownership and
+the original payer destination for every receipt (at most 100 per service call).
+The service derives the actor from authentication. Receipt numbers and callback
+phone fields do not establish ownership. The reservation freezes gross, net and
+B2C tariff; all quote allocations must be included. It prevents competing mint,
+top-up allocation and refunds before any network request.
+
+Construct a current KES `PaymentQuote` from the deployed B2C tariff schedule, for
+exactly the reserved net and reviewed canonical phone destination. Its fee and
+version must equal the reservation and its total must equal gross. Submit
+`execute_refund` with the reservation ID, case reference and quote. Use the same
+repository for OperatorService and OutboundPayments. The binding, float hold and
+authorization audit commit atomically before the existing one-send payout saga.
+Ordinary `make_payment` rejects refund quotes. Repeated calls and restarted
+operators use the same operation; ambiguous transport results remain Pending.
+
+Only independent Paid evidence closes exception custody, transactionally with
+payout resolution and balance-reservation release. Receipt reservations remain
+permanent, preventing reuse after payment. Definitive nonexecution releases only
+outbound float and leaves deposit custody held for review. There is no automatic
+resend, tariff substitution or cancellation/reallocation. An expired undispatched
+refund quote fails closed and requires further recovery implementation; do not
+try another reservation against the same receipts.
+
+## Held FX re-quote
+
+`requote_held_fx` requires a Reconciler, the original quote/version, new quote ID
+and eight-character account reference, reviewed owner, case and evidence references.
+It fetches the configured oracle before opening the writer transaction. Current
+FX must expire within 300 seconds. The service credits the entire verified held
+balance less the original collection tariff at the fresh exact rate. Timed holds,
+manual blocks, settled receipts and refund reservations prevent the operation.
+
+The transaction retires the old quote as RefundHeld, creates a Paid replacement
+and one settlement event, marks the original receipt records Settled, resolves
+exception custody and writes the immutable command/audit. Original provider
+provenance and ledger allocation stay intact; the event and requote record link
+receipts and old/new quote ownership. Consumer wiring must deliver the new event
+to the reviewed owner; never treat the old quote as paid. Identical replay returns
+the saved event even if the oracle is unavailable after restart. New top-ups to
+the retired quote enter separate exception custody.
+
+## Late independent payout evidence
+
+After a late callback for terminal money, the trusted supervisor may call
+`OutboundReconciler::inspect_late_evidence`. It consults the independent verifier
+without probing or sending. Bound contradictory final evidence is saved through
+the same immutable command boundary and enqueues a durable operator alert. Paid
+or Failed money is never rewritten. The default verifier remains unavailable.
+
+## Additional synthetic drills
+
+```sh
+cargo test -p daraja-core --test collection operator_refund_uses_one_send_saga_and_consumes_exception_only_after_paid --locked -- --nocapture
+cargo test -p daraja-core --test exceptions authenticated_fx_requote_consumes_held_funds_once_with_fresh_credit --locked -- --exact
+cargo test -p daraja-core --test exceptions fx_requote_audit_rollback_and_refund_race_preserve_single_owner --locked -- --exact
+cargo test -p daraja-core --test collection independent_late_contradiction --locked
+```
+
+Expected: refund 503 and acknowledgment cases each send once, remain Pending,
+replay through a fresh operator/repository and close custody only after verified
+Paid evidence. FX produces one fresh-rate event, rejects refund reuse and replays
+after reopen; failed audit rolls back and the refund/requote race has one winner.
+Late contradictory evidence creates one durable incident/alert and leaves Failed
+unchanged. All fixtures are synthetic and use temporary SQLite files and loopback
+HTTP; none calls a provider or moves money.

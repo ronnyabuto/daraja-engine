@@ -540,3 +540,123 @@ async fn bounded_queues_redact_subjects_and_remove_terminal_payouts() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn verification_retry_preserves_backoff_and_survives_restart() {
+    use daraja_core::operations::RetryVerification;
+    let (dir, r, _) = fixture().await;
+    let mut raw = SqliteConnection::connect(&format!(
+        "sqlite:{}",
+        dir.path().join("ledger.sqlite").display()
+    ))
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO durable_jobs(id,kind,subject,due_at,generation,poll_slot,retry_count) VALUES('verify-test','VERIFY_RECEIPT','observation-test',200,3,2,4)")
+        .execute(&mut raw).await.unwrap();
+    let request = RetryVerification {
+        command_id: id("retry-1"),
+        job_id: id("verify-test"),
+        expected_generation: 3,
+        reason: id("case-1"),
+        evidence_ref: id("statement-1"),
+    };
+    let svc = service(&r);
+    assert!(
+        svc.retry_verification(&observer(), &request, Timestamp(200))
+            .await
+            .is_err()
+    );
+    assert!(
+        svc.retry_verification(&Secret::new("invalid"), &request, Timestamp(200))
+            .await
+            .is_err()
+    );
+    assert!(
+        svc.retry_verification(&token(), &request, Timestamp(199))
+            .await
+            .is_err()
+    );
+    sqlx::query("UPDATE durable_jobs SET lease_until=210 WHERE id='verify-test'")
+        .execute(&mut raw)
+        .await
+        .unwrap();
+    assert!(
+        svc.retry_verification(&token(), &request, Timestamp(200))
+            .await
+            .is_err()
+    );
+    sqlx::query("UPDATE durable_jobs SET lease_until=NULL WHERE id='verify-test'")
+        .execute(&mut raw)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER reject_retry_audit BEFORE INSERT ON audit_records BEGIN SELECT RAISE(ABORT,'synthetic failure'); END").execute(&mut raw).await.unwrap();
+    assert!(
+        svc.retry_verification(&token(), &request, Timestamp(200))
+            .await
+            .is_err()
+    );
+    let generation: i64 =
+        sqlx::query_scalar("SELECT generation FROM durable_jobs WHERE id='verify-test'")
+            .fetch_one(&mut raw)
+            .await
+            .unwrap();
+    assert_eq!(generation, 3);
+    sqlx::query("DROP TRIGGER reject_retry_audit")
+        .execute(&mut raw)
+        .await
+        .unwrap();
+    let credential = token();
+    let (a, b) = tokio::join!(
+        svc.retry_verification(&credential, &request, Timestamp(200)),
+        svc.retry_verification(&credential, &request, Timestamp(200))
+    );
+    a.unwrap();
+    b.unwrap();
+    let row = sqlx::query(
+        "SELECT generation,poll_slot,retry_count,due_at FROM durable_jobs WHERE id='verify-test'",
+    )
+    .fetch_one(&mut raw)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<i64, _>("generation"), 4);
+    assert_eq!(row.get::<i64, _>("poll_slot"), 2);
+    assert_eq!(row.get::<i64, _>("retry_count"), 4);
+    assert_eq!(row.get::<i64, _>("due_at"), 200);
+    let mut stale = request.clone();
+    stale.command_id = id("retry-2");
+    assert!(
+        svc.retry_verification(&token(), &stale, Timestamp(200))
+            .await
+            .is_err()
+    );
+    let mut outbound = request.clone();
+    outbound.command_id = id("retry-outbound");
+    outbound.job_id = id("missing-payout-job");
+    assert!(
+        svc.retry_verification(&token(), &outbound, Timestamp(200))
+            .await
+            .is_err()
+    );
+    drop(svc);
+    r.close().await;
+    let reopened = Repository::open(dir.path().join("ledger.sqlite"))
+        .await
+        .unwrap();
+    service(&reopened)
+        .retry_verification(&token(), &request, Timestamp(300))
+        .await
+        .unwrap();
+    let mut conflict = request.clone();
+    conflict.reason = id("different-case");
+    assert!(
+        service(&reopened)
+            .retry_verification(&token(), &conflict, Timestamp(300))
+            .await
+            .is_err()
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM operator_verification_retries")
+        .fetch_one(&mut raw)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+}

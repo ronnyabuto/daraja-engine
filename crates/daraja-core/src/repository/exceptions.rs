@@ -135,7 +135,7 @@ impl Repository {
             if actual != request.authorization.receipts {
                 return Err(Error::EvidenceMismatch.into());
             }
-            a.reserve_refund(q)?;
+            a.reserve_refund(q, now)?;
             let version: i64 = sqlx::query_scalar("SELECT version FROM inbound_quotes WHERE id=?")
                 .bind(q.as_str())
                 .fetch_one(&mut *tx)
@@ -163,6 +163,12 @@ impl Repository {
     }
 
     pub async fn refund_status(&self, id: &Id) -> Result<String> {
+        let state: Option<String> = sqlx::query_scalar::<_, Option<String>>("SELECT p.state FROM refund_execution e LEFT JOIN outbound_payouts p ON json_extract(p.dispatch,'$.quote.id')=e.quote_id WHERE e.refund_id=?")
+            .bind(id.as_str()).fetch_optional(&self.pool).await?.flatten();
+        if let Some(state) = state {
+            return Ok(state);
+        }
+
         sqlx::query_scalar("SELECT state FROM refund_requests WHERE id=?")
             .bind(id.as_str())
             .fetch_optional(&self.pool)

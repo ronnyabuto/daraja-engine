@@ -220,8 +220,8 @@ Additional verified receipts remain separate exceptions. KES receipt-time grace
 is explicitly configured and defaults to zero; sat/FX expiry remains strict.
 Persisted timed risk holds and manual velocity/reversal blocks apply through all
 repository settlement paths. Operator block release does not bypass amount, FX,
-verification or timed hold checks. Refund requests remain `EXECUTION_GATED`;
-operator authentication/workflows and outbound execution remain later stages.
+verification or timed hold checks. Refund requests start `EXECUTION_GATED`; stage 15 adds authenticated binding
+and execution through the shared outbound saga.
 
 ## Stage 11 valuation
 
@@ -252,3 +252,12 @@ Pending with liabilities held, including internal linked sweeps. A Paid payout
 still debits older snapshots until a verified query started after its resolution
 supersedes it. Only independently definitive nonexecution restores capacity
 against the old observation. Collection float never backs customer payout admission.
+
+## Operator recovery
+
+[Operator commands](operator-runbook.md) authenticate separately from customers.
+Refunds use the existing Pending/manual/final-evidence payout saga; neither time
+nor transport failure releases deposit custody. Fresh FX re-quoting retires the
+original quote as RefundHeld and emits one Paid replacement event while preserving
+receipt provenance. Independent late terminal contradictions create incidents
+and alerts without rewriting money.

@@ -88,7 +88,26 @@ impl<T: HttpTransport, C: Clock + Send + Sync> OutboundPayments<T, C> {
     }
 
     pub async fn make_payment(&self, request: MakePayment) -> Result<Payout, DispatchError> {
-        if request.key.operation.as_str() != "payout" {
+        if self.repository.is_refund_quote(&request.quote_id).await? {
+            return Err(Error::EvidenceMismatch.into());
+        }
+        self.make_payment_inner(request).await
+    }
+
+    pub(crate) async fn execute_refund(&self, quote_id: Id) -> Result<Payout, DispatchError> {
+        self.make_payment_inner(MakePayment {
+            key: RequestKey {
+                caller: Id::new("operator-refund")?,
+                operation: Id::new("refund")?,
+                key: quote_id.clone(),
+            },
+            quote_id,
+        })
+        .await
+    }
+
+    async fn make_payment_inner(&self, request: MakePayment) -> Result<Payout, DispatchError> {
+        if !matches!(request.key.operation.as_str(), "payout" | "refund") {
             return Err(Error::EvidenceMismatch.into());
         }
         let quote = self.repository.payment_quote(&request.quote_id).await?;
