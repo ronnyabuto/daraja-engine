@@ -942,3 +942,82 @@ async fn one_receipt_cannot_finalize_two_payouts_through_worker_or_direct_reposi
     .unwrap();
     assert_eq!(released, 1);
 }
+
+#[tokio::test]
+async fn independent_late_contradiction_is_durable_without_reopening_terminal_money() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let repo = Repository::open(&path).await.unwrap();
+    let server = Server::new(vec![unknown()]).await;
+    let p = dispatch(&repo, &server, "0712345678").await;
+    repo.change_payout(
+        p.dispatch().operation_id(),
+        0,
+        daraja_core::repository::PayoutChange::Resolve(PayoutAttestation {
+            source: EvidenceSource::ReviewedStatement(id("reviewed-independent-provider-record")),
+            operation_id: p.dispatch().operation_id().clone(),
+            payload_hash: p.dispatch().hash(),
+            amount: p.dispatch().payload().amount,
+            destination: p.dispatch().payload().destination.clone(),
+            outcome: FinalOutcome::DefinitivelyNotExecuted {
+                evidence_record: id("reviewed-independent-provider-record"),
+            },
+        }),
+        Timestamp(time().0 + 1),
+    )
+    .await
+    .unwrap_err();
+    let (_, version) = repo.payout(p.dispatch().operation_id()).await.unwrap();
+    repo.change_payout(
+        p.dispatch().operation_id(),
+        version,
+        daraja_core::repository::PayoutChange::Resolve(PayoutAttestation {
+            source: EvidenceSource::ReviewedStatement(id("reviewed-independent-provider-record")),
+            operation_id: p.dispatch().operation_id().clone(),
+            payload_hash: p.dispatch().hash(),
+            amount: p.dispatch().payload().amount,
+            destination: p.dispatch().payload().destination.clone(),
+            outcome: FinalOutcome::DefinitivelyNotExecuted {
+                evidence_record: id("reviewed-independent-provider-record"),
+            },
+        }),
+        Timestamp(time().0 + 1),
+    )
+    .await
+    .unwrap();
+    let clock = TestClock::at(2);
+    let w = OutboundReconciler {
+        repository: repo.clone(),
+        queries: queries(&repo, &path, &server, &clock),
+        verifier: Reviewed {
+            outcome: FinalOutcome::Paid {
+                receipt: ReceiptId::new("LATEACTUAL").unwrap(),
+            },
+        },
+        clock,
+        config: ReconcileConfig::default(),
+    };
+    assert!(
+        w.inspect_late_evidence(p.dispatch().operation_id())
+            .await
+            .unwrap()
+    );
+    assert!(
+        w.inspect_late_evidence(p.dispatch().operation_id())
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        repo.payout(p.dispatch().operation_id())
+            .await
+            .unwrap()
+            .0
+            .state(),
+        OutboundState::Failed
+    );
+    let mut raw = db(&path).await;
+    assert_eq!(count(&mut raw, "operator_commands").await, 1);
+    let alerts:i64=sqlx::query_scalar("SELECT count(*) FROM operator_alert_deliveries WHERE reason='CONTRADICTORY_FINAL_EVIDENCE'").fetch_one(&mut raw).await.unwrap();
+    assert_eq!(alerts, 1);
+    assert_eq!(server.count(), 1);
+}

@@ -18,6 +18,231 @@ fn view(p: &Payout, version: i64) -> PayoutView {
 }
 
 impl Repository {
+    pub(crate) async fn operator_requote_replay(
+        &self,
+        actor: &Id,
+        request: &crate::operations::RequoteHeldFx,
+    ) -> Result<Option<SettlementEvent>> {
+        let row = sqlx::query(
+            "SELECT request,event FROM operator_fx_requotes WHERE actor=? AND command_id=?",
+        )
+        .bind(actor.as_str())
+        .bind(request.command_id.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+        if let Some(row) = row {
+            if row.try_get::<String, _>("request")? != encode(request)? {
+                return Err(Error::IdempotencyConflict.into());
+            }
+            return Ok(Some(decode(row.try_get("event")?)?));
+        }
+        Ok(None)
+    }
+
+    pub(crate) async fn operator_requote_fx(
+        &self,
+        actor: &Id,
+        request: &crate::operations::RequoteHeldFx,
+        fx: crate::amount::FxSnapshot,
+        now: Timestamp,
+    ) -> Result<SettlementEvent> {
+        let mut tx = self.write().await?;
+        let row = sqlx::query(
+            "SELECT request,event FROM operator_fx_requotes WHERE actor=? AND command_id=?",
+        )
+        .bind(actor.as_str())
+        .bind(request.command_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(row) = row {
+            if row.try_get::<String, _>("request")? != encode(request)? {
+                return Err(Error::IdempotencyConflict.into());
+            }
+            return decode(row.try_get("event")?);
+        }
+        fx.validate_at(now)?;
+        if fx.expires_at.0 > now.0.checked_add(300).ok_or(Error::Overflow)? {
+            return Err(Error::InvalidAmount.into());
+        }
+        let mut a = load_accounting(&mut tx, Some(&request.original_quote)).await?;
+        let original = a
+            .quote(&request.original_quote)
+            .ok_or(Error::NotFound)?
+            .clone();
+        let rows = sqlx::query("SELECT receipt,data FROM mpesa_receipts_ledger WHERE quote_id IS NULL AND json_extract(data,'$.deposit.quote_id')=?")
+            .bind(request.original_quote.as_str()).fetch_all(&mut *tx).await?;
+        for row in rows {
+            a.receipts.insert(
+                crate::identity::ReceiptId::new(row.try_get("receipt")?)?,
+                decode(row.try_get("data")?)?,
+            );
+        }
+        let mut total = crate::amount::Amount::new(0, crate::amount::Unit::KesMinor);
+        for (id, record) in &a.receipts {
+            let reserved: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM refund_reservations WHERE receipt=?)",
+            )
+            .bind(id.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+            if reserved {
+                return Err(Error::InvalidTransition.into());
+            }
+            total = total.checked_add(record.deposit.evidence().amount)?;
+        }
+        let terms = crate::inbound::QuoteTerms {
+            expected: total,
+            credit: fx.credit(total.checked_sub(original.terms().tariff.fee)?)?,
+            quote_expires_at: fx.expires_at,
+            fx: Some(fx),
+            tariff: original.terms().tariff.clone(),
+            hold_until: original.terms().hold_until,
+        };
+        let replacement = InboundQuote::new(
+            request.replacement_quote.clone(),
+            request.account_ref.clone(),
+            original.shortcode().clone(),
+            terms,
+        )?;
+        let event = a.requote_held_fx(&request.original_quote, replacement, now)?;
+        save_quote(
+            &mut tx,
+            a.quote(&request.original_quote).ok_or(Error::NotFound)?,
+            request.expected_version,
+        )
+        .await?;
+        let replacement = a.quote(&request.replacement_quote).ok_or(Error::NotFound)?;
+        sqlx::query("INSERT INTO inbound_quotes(id,account_ref,state,data) VALUES(?,?,?,?)")
+            .bind(replacement.id().as_str())
+            .bind(replacement.account_ref().as_str())
+            .bind(state(&replacement.state())?)
+            .bind(encode(replacement)?)
+            .execute(&mut *tx)
+            .await?;
+        for (id, record) in &a.receipts {
+            sqlx::query("UPDATE mpesa_receipts_ledger SET state=?,data=? WHERE receipt=?")
+                .bind(state(&record.state)?)
+                .bind(encode(record)?)
+                .bind(id.as_str())
+                .execute(&mut *tx)
+                .await?;
+            changed(sqlx::query("INSERT INTO unreconciled_deposits(receipt,reason,resolved_at,resolution_evidence) VALUES(?,'FX_REQUOTED',?,?) ON CONFLICT(receipt) DO UPDATE SET resolved_at=excluded.resolved_at,resolution_evidence=excluded.resolution_evidence WHERE unreconciled_deposits.resolved_at IS NULL")
+                .bind(id.as_str()).bind(time(now)?).bind(format!("FX_REQUOTE:{}",replacement.id().as_str())).execute(&mut *tx).await?.rows_affected())?;
+        }
+        sqlx::query("INSERT INTO settlement_events(quote_id,created_at,data) VALUES(?,?,?)")
+            .bind(event.quote_id.as_str())
+            .bind(time(now)?)
+            .bind(encode(&event)?)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO operator_fx_requotes VALUES(?,?,?,?,?,?,?)")
+            .bind(actor.as_str())
+            .bind(request.command_id.as_str())
+            .bind(request.original_quote.as_str())
+            .bind(request.replacement_quote.as_str())
+            .bind(encode(request)?)
+            .bind(encode(&event)?)
+            .bind(time(now)?)
+            .execute(&mut *tx)
+            .await?;
+        audit(
+            &mut tx,
+            &request.original_quote,
+            &format!("FX_REQUOTED:{}:{}", actor.as_str(), encode(request)?),
+            now,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(event)
+    }
+
+    pub(crate) async fn is_refund_quote(&self, id: &Id) -> Result<bool> {
+        Ok(
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM refund_execution WHERE quote_id=?)")
+                .bind(id.as_str())
+                .fetch_one(&self.pool)
+                .await?,
+        )
+    }
+
+    pub(crate) async fn operator_bind_refund(
+        &self,
+        actor: &Id,
+        reason: &Id,
+        refund_id: &Id,
+        quote: &crate::valuation::PaymentQuote,
+        now: Timestamp,
+    ) -> Result<()> {
+        let mut tx = self.write().await?;
+        let data: String = sqlx::query_scalar("SELECT data FROM refund_requests WHERE id=?")
+            .bind(refund_id.as_str())
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(Error::NotFound)?;
+        let request: serde_json::Value = serde_json::from_str(&data)?;
+        if request["authorization"]["operator"] != serde_json::to_value(actor)?
+            || request["authorization"]["destination"] != serde_json::to_value(quote.destination())?
+            || request["net"] != serde_json::to_value(quote.principal())?
+            || request["tariff"] != serde_json::to_value(quote.tariff())?
+            || request["gross"] != serde_json::to_value(quote.wallet_reserved())?
+            || quote.wallet_reserved().unit() != crate::amount::Unit::KesMinor
+            || !matches!(
+                crate::payout::Destination::parse(quote.destination().as_str()),
+                Ok(crate::payout::Destination::Phone(_))
+            )
+        {
+            return Err(Error::EvidenceMismatch.into());
+        }
+        let existing: Option<(String, String, String)> = sqlx::query_as(
+            "SELECT e.quote_id,e.actor,e.reason FROM refund_execution e WHERE refund_id=?",
+        )
+        .bind(refund_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some((id, old_actor, old_reason)) = existing {
+            let old: String = sqlx::query_scalar("SELECT data FROM payment_quotes WHERE id=?")
+                .bind(&id)
+                .fetch_one(&mut *tx)
+                .await?;
+            if id != quote.id().as_str()
+                || old_actor != actor.as_str()
+                || old_reason != reason.as_str()
+                || decode::<crate::valuation::PaymentQuote>(&old)? != *quote
+            {
+                return Err(Error::IdempotencyConflict.into());
+            }
+            return Ok(());
+        }
+        quote.validate_dispatch(now)?;
+        sqlx::query("INSERT INTO payment_quotes(id,data) VALUES(?,?)")
+            .bind(quote.id().as_str())
+            .bind(encode(quote)?)
+            .execute(&mut *tx)
+            .await?;
+        super::liquidity::reserve_quote(&mut tx, quote, now).await?;
+        sqlx::query("INSERT INTO refund_execution VALUES(?,?,?,?,?)")
+            .bind(refund_id.as_str())
+            .bind(quote.id().as_str())
+            .bind(actor.as_str())
+            .bind(reason.as_str())
+            .bind(time(now)?)
+            .execute(&mut *tx)
+            .await?;
+        audit(
+            &mut tx,
+            refund_id,
+            &format!(
+                "REFUND_EXECUTION_AUTHORIZED:{}:{}",
+                actor.as_str(),
+                reason.as_str()
+            ),
+            now,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub(crate) async fn operator_retry_verification(
         &self,
         actor: &Id,
@@ -315,6 +540,10 @@ impl Repository {
             // Fence an in-flight worker before it can commit an older reconciliation snapshot.
             sqlx::query("UPDATE durable_jobs SET completed_at=?,lease_until=NULL,generation=generation+1 WHERE kind='RECONCILE_PAYOUT' AND subject=?")
                 .bind(time(now)?).bind(request.payout_id.as_str()).execute(&mut *tx).await?;
+        }
+        if contradictory {
+            sqlx::query("INSERT INTO operator_alert_deliveries(kind,subject,reason,active,created_at,due_at) VALUES('MANUAL_PAYOUT',?,'CONTRADICTORY_FINAL_EVIDENCE',1,?,?)")
+                .bind(request.payout_id.as_str()).bind(time(now)?).bind(time(now)?).execute(&mut *tx).await?;
         }
         let outcome = if contradictory {
             "CONTRADICTORY"

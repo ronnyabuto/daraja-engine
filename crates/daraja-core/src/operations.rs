@@ -43,6 +43,7 @@ pub enum OperatorError {
     Forbidden,
     ContradictoryEvidence,
     Repository(RepositoryError),
+    Dispatch(crate::outbound::DispatchError),
 }
 impl From<RepositoryError> for OperatorError {
     fn from(value: RepositoryError) -> Self {
@@ -82,6 +83,18 @@ pub struct RetryVerification {
     pub command_id: Id,
     pub job_id: Id,
     pub expected_generation: i64,
+    pub reason: Id,
+    pub evidence_ref: Id,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct RequoteHeldFx {
+    pub command_id: Id,
+    pub original_quote: Id,
+    pub expected_version: i64,
+    pub replacement_quote: Id,
+    pub account_ref: Id,
+    pub owner: Id,
     pub reason: Id,
     pub evidence_ref: Id,
 }
@@ -130,6 +143,73 @@ pub struct OperatorService {
     credentials: Vec<OperatorCredential>,
 }
 impl OperatorService {
+    pub async fn requote_held_fx<O: crate::fx::FxOracle>(
+        &self,
+        token: &Secret,
+        request: &RequoteHeldFx,
+        oracle: &O,
+        now: Timestamp,
+    ) -> Result<crate::inbound::SettlementEvent, OperatorError> {
+        let actor = self.authenticate(token, true)?;
+        if let Some(event) = self
+            .repository
+            .operator_requote_replay(actor, request)
+            .await?
+        {
+            return Ok(event);
+        }
+        let fx = oracle.quote(now).await.map_err(|_| {
+            OperatorError::Repository(RepositoryError::Domain(crate::Error::FxExpired))
+        })?;
+        Ok(self
+            .repository
+            .operator_requote_fx(actor, request, fx, now)
+            .await?)
+    }
+
+    pub async fn request_refund(
+        &self,
+        token: &Secret,
+        id: &Id,
+        mut authorization: crate::repository::RefundAuthorization,
+        tariff: crate::amount::TariffSnapshot,
+        now: Timestamp,
+    ) -> Result<crate::repository::RefundRequest, OperatorError> {
+        let actor = self.authenticate(token, true)?;
+        if authorization.receipts.len() > 100 {
+            return Err(OperatorError::Repository(RepositoryError::Domain(
+                crate::Error::InvalidAmount,
+            )));
+        }
+        authorization.operator = actor.clone();
+        Ok(self
+            .repository
+            .request_refund(id, authorization, tariff, now)
+            .await?)
+    }
+
+    pub async fn execute_refund<
+        T: crate::transport::HttpTransport,
+        C: crate::crypto::Clock + Send + Sync,
+    >(
+        &self,
+        token: &Secret,
+        refund_id: &Id,
+        reason: &Id,
+        quote: &crate::valuation::PaymentQuote,
+        payments: &crate::outbound::OutboundPayments<T, C>,
+        now: Timestamp,
+    ) -> Result<crate::outbound::Payout, OperatorError> {
+        let actor = self.authenticate(token, true)?;
+        self.repository
+            .operator_bind_refund(actor, reason, refund_id, quote, now)
+            .await?;
+        payments
+            .execute_refund(quote.id().clone())
+            .await
+            .map_err(OperatorError::Dispatch)
+    }
+
     pub async fn retry_verification(
         &self,
         token: &Secret,

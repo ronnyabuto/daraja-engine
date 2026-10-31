@@ -255,8 +255,6 @@ impl Repository {
             if let Some(e) = evidence {
                 // Payout::resolve checks all frozen dispatch bindings and requires a receipt for Paid.
                 p.resolve(e)?;
-                sqlx::query("UPDATE balance_reservations SET released_at=?,evidence=? WHERE payout_id=? AND released_at IS NULL")
-                    .bind(time(now)?).bind(encode(&p.final_evidence())?).bind(claim.subject.as_str()).execute(&mut *tx).await?;
                 audit(&mut tx, &claim.subject, "VERIFIED_PAYOUT_RESOLUTION", now).await?;
             } else if let Some(reason) = manual
                 && p.state() != OutboundState::ManualReconciliationRequired
@@ -273,6 +271,10 @@ impl Repository {
                 .await?;
             }
             persist(&mut tx, &claim.subject, &p).await?;
+            if matches!(p.state(), OutboundState::Paid | OutboundState::Failed) {
+                sqlx::query("UPDATE balance_reservations SET released_at=?,evidence=? WHERE payout_id=? AND released_at IS NULL")
+                    .bind(time(now)?).bind(encode(&p.final_evidence())?).bind(claim.subject.as_str()).execute(&mut *tx).await?;
+            }
         }
         let terminal = matches!(p.state(), OutboundState::Paid | OutboundState::Failed);
         let next = if terminal {
