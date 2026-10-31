@@ -3,8 +3,8 @@
 The `daraja-core::operations::OperatorService` library currently supports a
 redacted payout view, bounded pending/exception queues, manual payout resolution
 and leased alert delivery. It has no network listener or CLI. Daemon integration,
-safe verification retry, hold review, refund and re-quote commands are still
-pending. Do not deploy this partial stage as an operator console.
+refund and re-quote commands are still pending. Authenticated hold review and
+budget-preserving inbound verification retry are available. Do not deploy this partial stage as an operator console.
 
 Deployment configuration owns a separate credential list (maximum 64 actors).
 Tokens must contain at least 32 bytes, be generated with suitable randomness,
@@ -86,3 +86,19 @@ Expired generations cannot acknowledge; an identical successful acknowledgment
 can be repeated after a lost response. Claims, retries and delivery evidence
 are audited. Alert delivery never resolves money or releases proofs. No external
 sink is contacted by the library or the synthetic tests.
+
+## Safe inbound verification retry
+
+A Reconciler may submit `retry_verification` with a stable command ID, job ID,
+expected generation, opaque reason and evidence reference. Only due, unfinished
+POLL_STK, VERIFY_RECEIPT or INBOUND_CALLBACK work without a live lease is eligible.
+Backoff deadlines, poll slots and retry counts are preserved. The command fences
+older workers and leaves verification to the existing leased inbound reconciler;
+it supplies no settlement evidence or provider permission. Identical replay by
+the same actor survives restart; changed terms and stale generations conflict.
+The command and audit commit together. This command does not retry payouts.
+
+`review_deposit_hold` requires Reconciler credentials and an expected block reason.
+Its immutable command and audit commit with block removal. Existing value, time,
+FX and evidence predicates still apply. Replaying a prior command cannot remove
+a subsequently inserted block. Reviewers must obtain fresh evidence for new blocks.

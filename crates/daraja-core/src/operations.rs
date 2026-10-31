@@ -77,6 +77,15 @@ pub struct ReviewDepositHold {
     pub evidence_ref: Id,
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct RetryVerification {
+    pub command_id: Id,
+    pub job_id: Id,
+    pub expected_generation: i64,
+    pub reason: Id,
+    pub evidence_ref: Id,
+}
+
 /// Contains no wire body, destination, callback URL, receipt or bearer material.
 #[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
 pub struct PayoutView {
@@ -121,6 +130,19 @@ pub struct OperatorService {
     credentials: Vec<OperatorCredential>,
 }
 impl OperatorService {
+    pub async fn retry_verification(
+        &self,
+        token: &Secret,
+        request: &RetryVerification,
+        now: Timestamp,
+    ) -> Result<(), OperatorError> {
+        let actor = self.authenticate(token, true)?;
+        Ok(self
+            .repository
+            .operator_retry_verification(actor, request, now)
+            .await?)
+    }
+
     pub async fn review_deposit_hold(
         &self,
         token: &Secret,

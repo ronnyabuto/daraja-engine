@@ -131,7 +131,7 @@ async fn migrations_reopen_and_connection_settings() {
         InboundState::Issued
     );
     let mut c = raw(&dir.path().join("ledger.sqlite")).await;
-    assert_eq!(count(&mut c, "_sqlx_migrations").await, 12);
+    assert_eq!(count(&mut c, "_sqlx_migrations").await, 13);
     assert_eq!(
         sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
             .fetch_one(&mut c)
@@ -672,7 +672,7 @@ async fn ordered_upgrade_preserves_rows_and_checksum_tampering_fails_closed() {
     assert_eq!(r.quote(&id("quote")).await.unwrap().0, q);
     r.close().await;
     let mut c = raw(&path).await;
-    assert_eq!(count(&mut c, "_sqlx_migrations").await, 12);
+    assert_eq!(count(&mut c, "_sqlx_migrations").await, 13);
     sqlx::query("UPDATE _sqlx_migrations SET checksum=x'00' WHERE version=1")
         .execute(&mut c)
         .await

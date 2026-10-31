@@ -18,6 +18,51 @@ fn view(p: &Payout, version: i64) -> PayoutView {
 }
 
 impl Repository {
+    pub(crate) async fn operator_retry_verification(
+        &self,
+        actor: &Id,
+        request: &crate::operations::RetryVerification,
+        now: Timestamp,
+    ) -> Result<()> {
+        let mut tx = self.write().await?;
+        let data = encode(request)?;
+        let previous: Option<String> = sqlx::query_scalar(
+            "SELECT request FROM operator_verification_retries WHERE actor=? AND command_id=?",
+        )
+        .bind(actor.as_str())
+        .bind(request.command_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(previous) = previous {
+            if previous != data {
+                return Err(Error::IdempotencyConflict.into());
+            }
+            return Ok(());
+        }
+        // Preserve scheduling budgets and backoff; only due inbound verification
+        // can be handed back to the existing worker under a fresh generation.
+        changed(sqlx::query("UPDATE durable_jobs SET lease_until=NULL,generation=generation+1 WHERE id=? AND generation=? AND kind IN ('POLL_STK','VERIFY_RECEIPT','INBOUND_CALLBACK') AND completed_at IS NULL AND due_at<=? AND (lease_until IS NULL OR lease_until<=?)")
+            .bind(request.job_id.as_str()).bind(request.expected_generation).bind(time(now)?).bind(time(now)?)
+            .execute(&mut *tx).await?.rows_affected())?;
+        sqlx::query("INSERT INTO operator_verification_retries VALUES(?,?,?,?,?)")
+            .bind(actor.as_str())
+            .bind(request.command_id.as_str())
+            .bind(request.job_id.as_str())
+            .bind(&data)
+            .bind(time(now)?)
+            .execute(&mut *tx)
+            .await?;
+        audit(
+            &mut tx,
+            &request.job_id,
+            &format!("VERIFICATION_RETRY:{}:{}", actor.as_str(), data),
+            now,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub(crate) async fn operator_review_deposit_hold(
         &self,
         actor: &Id,
